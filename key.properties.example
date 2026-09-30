@@ -1,0 +1,8 @@
+# Copy this file to android/key.properties for LOCAL builds only
+# (Android Studio / `flutter build apk` on your own machine).
+# Never commit the real key.properties or the .jks file to GitHub —
+# they are already excluded in .gitignore.
+storePassword=REPLACE_ME
+keyPassword=REPLACE_ME
+keyAlias=upload
+storeFile=../upload-keystore.jks

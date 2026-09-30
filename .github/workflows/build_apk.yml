@@ -1,0 +1,58 @@
+name: Build Android APK
+
+# بناء يدوي فقط: يشتغل لما تضغط "Run workflow" من تبويب Actions.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.0'
+          channel: stable
+          cache: false
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Generate missing Android scaffold files (gradlew, icons)
+        # هذا المستودع يحتفظ فقط بالملفات المخصصة (build.gradle,
+        # AndroidManifest.xml, MainActivity.kt). سكربت Gradle wrapper
+        # وأيقونات التطبيق الافتراضية مش موجودين، فبننشئهم في مشروع
+        # مؤقت منفصل وننسخهم بس — من غير ما نلمس lib/ أو pubspec.yaml
+        # أو ملفات android/app المخصصة عندنا.
+        run: |
+          flutter create --platforms=android --org com.example --project-name earth_to_moon_learning_game /tmp/scaffold
+          cp /tmp/scaffold/android/gradlew android/gradlew
+          cp /tmp/scaffold/android/gradlew.bat android/gradlew.bat
+          cp -r /tmp/scaffold/android/gradle/wrapper/. android/gradle/wrapper/
+          mkdir -p android/app/src/main/res
+          cp -r /tmp/scaffold/android/app/src/main/res/. android/app/src/main/res/
+          chmod +x android/gradlew
+
+      - name: Decode signing keystore
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/upload-keystore.jks
+
+      - name: Create key.properties
+        run: |
+          cat > android/key.properties << PROPS
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          storeFile=../upload-keystore.jks
+          PROPS
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: earth-to-moon-release
+          path: build/app/outputs/flutter-apk/app-release.apk
