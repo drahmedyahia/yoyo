@@ -56,7 +56,7 @@ jobs:
             # مفتاح تجريبي ثابت موجود في المستودع: كل البناءات بنفس التوقيع
             # فيمكن تثبيت النسخة الجديدة فوق القديمة. للتجربة فقط.
             rm -f android/upload-keystore.jks
-            printf 'storePassword=android\nkeyPassword=android\nkeyAlias=testkey\nstoreFile=test-keystore.jks\n' > android/key.properties
+            printf 'storePassword=android\nkeyPassword=android\nkeyAlias=testkey\nstoreFile=../test-keystore.jks\n' > android/key.properties
             echo "::warning::Signing secrets missing or invalid; signing with the repo's test key."
           fi
 
