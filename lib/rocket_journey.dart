@@ -3,24 +3,42 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
-// المرحلة الأولى: رحلة الصاروخ من الأرض إلى القمر.
-// اللاعب يقود صاروخاً ويطلق النار بمسدس على الوحوش، بينما تُعرض
-// الأجرام السماوية والمعالم الحقيقية للرحلة (الغلاف الجوي، محطة الفضاء
-// الدولية، أحزمة فان ألن، الأقمار الصناعية، الكواكب، مذنب، القمر...).
+import 'space3d.dart';
+import 'space_art.dart';
+import 'space_audio.dart';
+
+// المرحلة الأولى: رحلة مركبة أوريون (ناسا) من الأرض إلى القمر بعرض
+// ثلاثي الأبعاد. الأرض والقمر مرسومان بخرائط ناسا الحقيقية، والخلفية
+// خريطة النجوم ودرب التبانة الحقيقية، وتظهر صور حقيقية من مهمات أبولو
+// وأرتميس ومحطة الفضاء الدولية مع المعلومات أثناء الرحلة.
+// العقبات صخور فضائية ونيازك يحطمها اللاعب بالليزر.
 
 const double kEarthMoonKm = 384400;
 const double kEarthRadiusKm = 6371;
 const double kMoonRadiusKm = 1737;
 
+/// ارتفاع مدار القمر في النهاية (مثل أرتميس 1 عند أقرب نقطة).
+const double kLunarOrbitKm = 130;
+
 /// عدد الثواني (من وقت اللعب) لقطع الرحلة كاملة بالسرعة القصوى.
 const double kJourneySeconds = 105;
 
-/// نقطة ظهور الوحش العملاق (نسبة من تقدم الرحلة).
+/// نقطة ظهور الكويكب العملاق (نسبة من تقدم الرحلة).
 const double kBossAt = 0.93;
+
+const double kCountdownSeconds = 5.4;
+const double kLiftoffSeconds = 2.6;
+const double kArrivalSeconds = 8;
+
+/// حدود حركة المركبة في المستوى أمام الكاميرا (وحدات العالم).
+const double kMaxX = 5.2, kMinY = -3.2, kMaxY = 3.6;
 
 double _clamp01(double v) => v < 0 ? 0 : (v > 1 ? 1 : v);
 double _lerp(double a, double b, double t) => a + (b - a) * t;
-Color _fade(Color c, double o) => c.withOpacity(_clamp01(o));
+double _smooth(double a, double b, double v) {
+  final t = _clamp01((v - a) / (b - a));
+  return t * t * (3 - 2 * t);
+}
 
 /// المسافة الحقيقية (كم) مقابل تقدم اللعب. منحنى تكعيبي حتى تأخذ
 /// المراحل القريبة من الأرض (الغيوم، خط كارمان، محطة الفضاء) وقتاً كافياً.
@@ -55,221 +73,287 @@ String formatInt(num v) {
   return v < 0 ? '-$b' : b.toString();
 }
 
-enum JourneyPhase { countdown, flying, landing, won, lost }
+enum JourneyPhase { countdown, liftoff, flying, arrival, won, lost }
 
-class _Fact {
+class JourneyFact {
   final double km;
-  final String ar;
-  final String en;
-  const _Fact(this.km, this.ar, this.en);
+  final String ar, en;
+
+  /// صورة حقيقية من ناسا (اختيارية) مع وصفها.
+  final String? image;
+  final String? captionAr, captionEn;
+  const JourneyFact(this.km, this.ar, this.en, {this.image, this.captionAr, this.captionEn});
 }
 
-const List<_Fact> _facts = [
-  _Fact(0, 'انطلاق! اسحب الصاروخ يميناً ويساراً واضغط زر المسدس لإطلاق النار',
-      'Liftoff! Drag to steer and press the pistol button to shoot'),
-  _Fact(12, 'تجاوزنا الغيوم: طبقة التروبوسفير تنتهي على ارتفاع نحو 12 كم',
-      'Above the clouds: the troposphere ends at about 12 km'),
-  _Fact(30, 'طبقة الأوزون (15–35 كم) تحمي الأرض من الأشعة فوق البنفسجية',
+const List<JourneyFact> journeyFacts = [
+  JourneyFact(0, 'انطلق صاروخ SLS، أقوى صاروخ أطلقته ناسا، وعلى قمته مركبة أوريون',
+      'Liftoff! SLS, NASA\'s most powerful rocket, carries the Orion spacecraft',
+      image: 'assets/images/liftoff.jpg',
+      captionAr: 'إطلاق أرتميس 1 — 16 نوفمبر 2022',
+      captionEn: 'Artemis I launch — Nov 16, 2022'),
+  JourneyFact(12, 'عبرنا الغيوم: طبقة التروبوسفير تنتهي على ارتفاع نحو 12 كم، وفيها يحدث الطقس كله',
+      'Above the clouds: the troposphere ends at ~12 km — all weather happens below'),
+  JourneyFact(20, 'يميل الصاروخ تدريجياً نحو الأفق (مناورة الدوران بالجاذبية) ليكتسب سرعة المدار: 28,000 كم/س',
+      'The rocket slowly tips toward the horizon (gravity turn) to gain orbital speed: 28,000 km/h'),
+  JourneyFact(30, 'طبقة الأوزون (15–35 كم) تحمي الأرض من الأشعة فوق البنفسجية',
       'The ozone layer (15–35 km) shields Earth from UV rays'),
-  _Fact(100, 'خط كارمان 100 كم: هنا يبدأ الفضاء رسمياً والسماء تصبح سوداء',
-      'Kármán line, 100 km: space officially begins and the sky turns black'),
-  _Fact(330, 'محطة الفضاء الدولية تدور على ارتفاع 400 كم بسرعة 28,000 كم/س',
-      'The ISS orbits at 400 km, moving at 28,000 km/h'),
-  _Fact(1000, 'حرق الانتقال إلى القمر: سرعتنا الآن نحو 37,000 كم/س!',
-      'Trans-lunar injection: we are now moving at ~37,000 km/h!'),
-  _Fact(2500, 'أحزمة فان ألن: جسيمات مشحونة يحبسها المجال المغناطيسي للأرض',
+  JourneyFact(45, 'انفصل المعززان الصاروخيان بعد دقيقتين تقريباً من الإطلاق',
+      'The two solid rocket boosters separate about two minutes after launch'),
+  JourneyFact(70, 'طبقة الميزوسفير (50–85 كم): هنا تحترق معظم الشهب وتتوهج بسبب احتكاكها بالهواء — تفادَها!',
+      'Mesosphere (50–85 km): most meteors burn up and glow here — dodge them!'),
+  JourneyFact(100, 'خط كارمان 100 كم: بداية الفضاء. لا يوجد هواء هنا، لذلك لا ينتقل الصوت ويخفت هدير المحرك',
+      'Kármán line, 100 km: space begins. No air means no sound — the engine roar fades',
+      image: 'assets/images/earth_limb.jpg',
+      captionAr: 'حافة الغلاف الجوي كما تُرى من محطة الفضاء',
+      captionEn: 'Earth\'s thin atmosphere seen from the ISS'),
+  JourneyFact(125, 'انفصلت المرحلة الأساسية، وفتحت أوريون ألواحها الشمسية الأربعة لتوليد الكهرباء من ضوء الشمس',
+      'Core stage separation! Orion unfolds its four solar wings to make electricity'),
+  JourneyFact(330, 'محطة الفضاء الدولية على ارتفاع 400 كم تدور بسرعة 28,000 كم/س وتكمل دورة كل 90 دقيقة',
+      'The ISS orbits at 400 km, moving at 28,000 km/h — one lap every 90 minutes',
+      image: 'assets/images/iss.jpg',
+      captionAr: 'محطة الفضاء الدولية — صورة حقيقية',
+      captionEn: 'The International Space Station — real photo'),
+  JourneyFact(600, 'احذر الصخور الفضائية! النيازك الصغيرة تتحرك أسرع من الرصاصة بعشرات المرات — حطّمها بالليزر',
+      'Watch out for space rocks! Tiny meteoroids move many times faster than a bullet — blast them'),
+  JourneyFact(1000, 'حرق الانتقال إلى القمر (TLI): سرعتنا الآن نحو 37,000 كم/س!',
+      'Trans-lunar injection burn: we are now moving at ~37,000 km/h!'),
+  JourneyFact(2500, 'أحزمة فان ألن: جسيمات مشحونة يحبسها المجال المغناطيسي للأرض، والمركبة محمية منها',
       'Van Allen belts: charged particles trapped by Earth\'s magnetic field'),
-  _Fact(18000, 'أقمار نظام GPS تدور على ارتفاع 20,200 كم',
-      'GPS satellites orbit at 20,200 km'),
-  _Fact(33000, 'المدار الثابت 35,786 كم: هنا أقمار الاتصالات والطقس',
-      'Geostationary orbit, 35,786 km: home of weather & TV satellites'),
-  _Fact(60000, 'الأرض تصغر خلفنا... لاحظ الكواكب البعيدة: الزهرة والمريخ والمشتري',
-      'Earth shrinks behind us… spot the planets: Venus, Mars and Jupiter'),
-  _Fact(105000, 'مذنّب! ذيله يشير دائماً بعيداً عن الشمس',
-      'A comet! Its tail always points away from the Sun'),
-  _Fact(192200, 'منتصف الطريق! قطعنا 192,200 كم وجاذبية الأرض تُبطئنا',
-      'Halfway! 192,200 km done — Earth\'s gravity is slowing us down'),
-  _Fact(290000, 'دخلنا منطقة جاذبية القمر: القمر يسحبنا الآن نحوه',
-      'Entering the Moon\'s sphere of influence: it now pulls us in'),
+  JourneyFact(18000, 'أقمار نظام GPS تدور على ارتفاع 20,200 كم وتحدد موقعك على الخريطة',
+      'GPS satellites orbit at 20,200 km and tell your phone where you are'),
+  JourneyFact(33000, 'المدار الثابت 35,786 كم: أقمار الطقس والاتصالات. في 2029 سيمر الكويكب أبوفيس أقرب من هذا المدار!',
+      'Geostationary orbit, 35,786 km. In 2029 asteroid Apophis will pass even closer than this!'),
+  JourneyFact(55000, 'لاحظ الكواكب في السماء: الزهرة والمريخ والمشتري تلمع مثل نجوم لا تومض',
+      'Spot the planets: Venus, Mars and Jupiter shine like stars that don\'t twinkle'),
+  JourneyFact(75000, 'صورة "الكرة الزرقاء" الشهيرة التقطها رواد أبولو 17 عام 1972 في طريقهم إلى القمر',
+      'The famous "Blue Marble" photo was taken by Apollo 17 astronauts on the way to the Moon',
+      image: 'assets/images/blue_marble.jpg',
+      captionAr: 'الكرة الزرقاء — أبولو 17، 1972',
+      captionEn: 'Blue Marble — Apollo 17, 1972'),
+  JourneyFact(105000, 'مذنّب! كرة من الجليد والغبار، وذيله يشير دائماً بعيداً عن الشمس',
+      'A comet! A ball of ice and dust — its tail always points away from the Sun',
+      image: 'assets/images/comet.jpg',
+      captionAr: 'المذنب نيووايز فوق الأرض — من محطة الفضاء 2020',
+      captionEn: 'Comet NEOWISE above Earth — from the ISS, 2020'),
+  JourneyFact(150000, 'الشريط اللامع في السماء هو مجرتنا درب التبانة، وفيها أكثر من 100 مليار نجم',
+      'The glowing band across the sky is our galaxy, the Milky Way — over 100 billion stars'),
+  JourneyFact(192200, 'منتصف الطريق! قطعنا 192,200 كم وجاذبية الأرض تُبطئنا',
+      'Halfway! 192,200 km done — Earth\'s gravity is slowing us down',
+      image: 'assets/images/orion_earth_moon.jpg',
+      captionAr: 'أوريون تصوّر الأرض والقمر معاً — أرتميس 1',
+      captionEn: 'Orion sees Earth and Moon together — Artemis I'),
+  JourneyFact(290000, 'دخلنا منطقة جاذبية القمر. سطحه مليء بالفوهات لأنه بلا غلاف جوي يحرق النيازك',
+      'Entering the Moon\'s gravity zone. It is full of craters: no air to burn up meteoroids',
+      image: 'assets/images/moon_flyby.jpg',
+      captionAr: 'القمر من كاميرا أوريون — أرتميس 1',
+      captionEn: 'The Moon from Orion\'s camera — Artemis I'),
 ];
 
-class _Star {
-  final double x, y, r, speed, twinkle;
-  final Color color;
-  const _Star(this.x, this.y, this.r, this.speed, this.twinkle, this.color);
-}
-
-class _Blob {
-  final double lon, lat, size, stretch;
-  const _Blob(this.lon, this.lat, this.size, this.stretch);
-}
-
-class _Shot {
-  double x, y, vx, vy;
+class _Rock {
+  final int kind; // 0 صغيرة، 1 متوسطة، 2 كبيرة، 3 شهاب (في الغلاف الجوي)، 4 الكويكب العملاق
+  V3 pos;
+  V3 vel;
+  final double radius;
+  double hp;
+  final double maxHp;
+  final int mesh;
+  double ax, ay, az;
+  final double sx, sy, sz;
+  double age = 0;
+  double hitFlash = 0;
+  double throwTimer = 2.5;
   bool dead = false;
-  _Shot(this.x, this.y, this.vx, this.vy);
+  bool passed = false;
+
+  _Rock({
+    required this.kind,
+    required this.pos,
+    required this.vel,
+    required this.radius,
+    required this.hp,
+    required this.mesh,
+    required math.Random rnd,
+  })  : maxHp = hp,
+        ax = rnd.nextDouble() * 6,
+        ay = rnd.nextDouble() * 6,
+        az = rnd.nextDouble() * 6,
+        sx = (rnd.nextDouble() - .5) * 2.4,
+        sy = (rnd.nextDouble() - .5) * 2.4,
+        sz = (rnd.nextDouble() - .5) * 1.4;
+
+  bool get isBoss => kind == 4;
+  M3 get rot => M3.rotZ(az) * M3.rotY(ay) * M3.rotX(ax);
+}
+
+class _Laser {
+  V3 pos, prev;
+  final V3 vel;
+  double age = 0;
+  bool dead = false;
+  _Laser(this.pos, this.vel) : prev = pos;
 }
 
 class _Particle {
-  double x, y, vx, vy, life;
+  V3 pos;
+  V3 vel;
+  double life;
   final double maxLife, size;
   final Color color;
-  _Particle(this.x, this.y, this.vx, this.vy, this.life, this.size, this.color)
-      : maxLife = life;
+  final double drag;
+  final bool glow;
+  _Particle(this.pos, this.vel, this.life, this.size, this.color, {this.drag = 1.2, this.glow = true}) : maxLife = life;
 }
 
-class _Monster {
-  final int kind; // 0 فقاعة، 1 أخطبوط، 2 شوكي، 3 الوحش العملاق
-  double x, y;
-  final double baseX;
-  double hp;
-  final double maxHp;
-  final double radius;
-  final double speed;
-  final double phase;
-  double age = 0;
-  double shootTimer;
-  double hitFlash = 0;
-  bool dead = false;
+/// أجسام المشهد غير الخطرة: محطة الفضاء، الأقمار الصناعية، المراحل المنفصلة.
+class _Scenery {
+  final String kind; // iss, gps, geo, srbL, srbR, core
+  V3 pos;
+  V3 vel;
+  double angle = 0;
+  final double spin;
+  final V3 axis;
+  _Scenery(this.kind, this.pos, this.vel, {this.spin = 0, this.axis = const V3(1, 0, 0)});
+}
 
-  _Monster({
-    required this.kind,
-    required this.x,
-    required this.y,
-    required this.hp,
-    required this.radius,
-    required this.speed,
-    required this.phase,
-    required this.shootTimer,
-  })  : baseX = x,
-        maxHp = hp;
-
-  bool get isBoss => kind == 3;
+class _Puff {
+  V3 pos;
+  final double size;
+  _Puff(this.pos, this.size);
 }
 
 class JourneyWorld extends ChangeNotifier {
   final bool arabic;
-  final math.Random rnd = math.Random();
+  final math.Random rnd;
 
   Size size = Size.zero;
   JourneyPhase phase = JourneyPhase.countdown;
-  double countdown = 3.5;
+  bool ready = true;
+  double countdown = kCountdownSeconds;
+  double liftoffT = 0;
   double time = 0;
-  double clock = 0; // وقت عام للرسوم المتحركة
+  double clock = 0;
   double progress = 0;
   double km = 0;
   double realSeconds = 0;
-  double scroll = 0;
+  double groundAngle = 0;
 
-  double rocketX = 0.5;
-  double rocketLift = 0;
-  double rocketScale = 1;
+  // المركبة
+  double px = 0, py = 0;
+  double vx = 0, vy = 0;
+  double bank = 0;
+  bool srbAttached = true;
+  bool coreAttached = true;
+  double separationT = 0; // زمن منذ انفصال المرحلة الأساسية
+  double deploy = 0; // الألواح الشمسية
+  double engineBurn = 1;
+
   bool firing = false;
   double fireCooldown = 0;
-  double muzzle = 0;
-
   int lives = 3;
   double invulnerable = 0;
+  double damageFlash = 0;
   int score = 0;
   int kills = 0;
-  double spawnTimer = 2.5;
+  double spawnTimer = 1.5;
+  double puffTimer = 0;
   bool bossSpawned = false;
   bool bossDefeated = false;
-  double landingT = 0;
+  double arrivalT = 0;
   double shake = 0;
 
   int nextFact = 0;
+  JourneyFact? fact;
   String factText = '';
   double factTimer = 0;
+  int arrivalFacts = 0;
 
-  final List<_Monster> monsters = [];
-  final List<_Shot> shots = [];
-  final List<_Shot> enemyShots = [];
+  final List<_Rock> rocks = [];
+  final List<_Laser> lasers = [];
   final List<_Particle> particles = [];
-  final List<_Shot> meteors = [];
-  double meteorTimer = 3;
+  final List<_Scenery> scenery = [];
+  final List<_Puff> puffs = [];
+  late final List<V3> dust;
 
-  late final List<_Star> stars;
-  late final List<_Blob> continents;
-  late final List<_Blob> earthClouds;
-  late final List<_Blob> craters;
-  late final List<_Blob> maria;
-  late final List<Offset> skyClouds;
+  /// أحداث صوتية ينفذها مشغل الصوت ثم يفرغها.
+  final List<(String, double)> sounds = [];
 
-  JourneyWorld({required this.arabic}) {
-    final r = math.Random(11);
-    const starColors = [
-      Colors.white,
-      Color(0xFFCFE3FF),
-      Color(0xFFFFF1C9),
-      Color(0xFFFFD2C2),
-    ];
-    stars = List.generate(170, (i) {
-      final layer = i % 3;
-      return _Star(
-        r.nextDouble(),
-        r.nextDouble(),
-        .4 + r.nextDouble() * (0.6 + layer * .5),
-        [.08, .22, .5][layer],
-        r.nextDouble() * math.pi * 2,
-        starColors[r.nextInt(starColors.length)],
-      );
-    });
-    continents = List.generate(12, (_) => _Blob(
-          r.nextDouble() * math.pi * 2,
-          (r.nextDouble() - .5) * 2.7,
-          .18 + r.nextDouble() * .25,
-          .6 + r.nextDouble() * .9,
-        ));
-    earthClouds = List.generate(12, (_) => _Blob(
-          r.nextDouble() * math.pi * 2,
-          (r.nextDouble() - .5) * 2.6,
-          .08 + r.nextDouble() * .14,
-          1.5 + r.nextDouble() * 2,
-        ));
-    craters = List.generate(22, (_) {
-      final a = r.nextDouble() * math.pi * 2;
-      final d = math.sqrt(r.nextDouble()) * .85;
-      return _Blob(math.cos(a) * d, math.sin(a) * d, .03 + r.nextDouble() * .1, 1);
-    });
-    maria = const [
-      _Blob(-.25, -.2, .28, 1.3),
-      _Blob(.2, -.35, .2, 1.1),
-      _Blob(.1, .1, .22, .9),
-      _Blob(-.4, .25, .16, 1.2),
-    ];
-    skyClouds = List.generate(9, (_) => Offset(r.nextDouble(), r.nextDouble()));
+  JourneyWorld({required this.arabic, int? seed}) : rnd = math.Random(seed) {
+    final r = math.Random(5);
+    dust = List.generate(110, (_) => V3((r.nextDouble() - .5) * 30, (r.nextDouble() - .5) * 20, r.nextDouble() * 110));
   }
 
   String tr(String ar, String en) => arabic ? ar : en;
 
-  double get rocketPx => rocketX * size.width;
-  double get rocketPy => size.height * .78 - rocketLift;
-  double get speedKmh =>
-      phase == JourneyPhase.countdown ? 0 : speedKmhAt(km);
+  V3 get probePos => V3(px, py, 0);
+  double get speedKmh => (phase == JourneyPhase.countdown || phase == JourneyPhase.liftoff) ? 0 : speedKmhAt(km);
   bool get bossFight => bossSpawned && !bossDefeated;
+  bool get stackAttached => coreAttached;
 
-  _Monster? get boss {
-    for (final m in monsters) {
+  /// اتجاه المركبة: يبدأ الصاروخ عمودياً تقريباً ثم يميل نحو الأفق
+  /// (مناورة الدوران بالجاذبية)، مع ميلان جانبي أثناء التوجيه.
+  M3 get probeRot {
+    final pitch = coreAttached ? 1.05 * (1 - _smooth(0, 70, km)) : 0.0;
+    return M3.rotZ(bank) * M3.rotX(-pitch - vy * .02);
+  }
+
+  /// 1 داخل الغلاف الجوي و0 في الفضاء.
+  double get atmosphere => 1 - _smooth(8, 100, km);
+
+  _Rock? get boss {
+    for (final m in rocks) {
       if (m.isBoss) return m;
     }
     return null;
   }
 
+  /// سرعة اقتراب الأجسام بوحدات العالم في الثانية.
+  double get approachSpeed {
+    if (phase == JourneyPhase.flying) return (26 + 30 * progress) * _clamp01(.25 + time / 6);
+    if (phase == JourneyPhase.arrival) return 26 * (1 - _smooth(0, 3, arrivalT));
+    return 0;
+  }
+
   String get zoneName {
+    if (phase == JourneyPhase.arrival || phase == JourneyPhase.won) return tr('مدار القمر', 'Lunar orbit');
     if (km < 12) return tr('التروبوسفير', 'Troposphere');
     if (km < 50) return tr('الستراتوسفير', 'Stratosphere');
-    if (km < 100) return tr('الغلاف الجوي العلوي', 'Upper atmosphere');
+    if (km < 85) return tr('الميزوسفير', 'Mesosphere');
+    if (km < 100) return tr('الثيرموسفير', 'Thermosphere');
     if (km < 2000) return tr('مدار أرضي منخفض', 'Low Earth orbit');
     if (km < 60000) return tr('أحزمة فان ألن والأقمار الصناعية', 'Van Allen belts & satellites');
     if (km < 290000) return tr('الفضاء بين الأرض والقمر', 'Cislunar space');
     return tr('مجال جاذبية القمر', 'Moon\'s gravity zone');
   }
 
-  void showFact(String text) {
-    factText = text;
-    factTimer = 5;
+  // مستويات الصوت المستمرة
+  double get roarLevel {
+    if (phase == JourneyPhase.liftoff) return 1;
+    if (phase != JourneyPhase.flying) return 0;
+    final tli = km > 950 && km < 1600 ? .35 : 0.0; // حرق الانتقال إلى القمر
+    return math.max(1 - _smooth(20, 100, km), tli);
   }
+
+  double get ambienceLevel {
+    if (phase == JourneyPhase.countdown || phase == JourneyPhase.liftoff) return 0;
+    return .55 * _smooth(50, 130, km);
+  }
+
+  double get engineLevel {
+    if (phase == JourneyPhase.flying && !coreAttached) return .18 + engineBurn * .3;
+    if (phase == JourneyPhase.arrival) return .25;
+    return 0;
+  }
+
+  void sound(String id, [double volume = 1]) => sounds.add((id, volume));
+
+  void showFact(JourneyFact f) {
+    fact = f;
+    factText = tr(f.ar, f.en);
+    factTimer = f.image != null ? 7 : 5.5;
+  }
+
+  void showText(String ar, String en, {String? image, String? capAr, String? capEn}) =>
+      showFact(JourneyFact(km, ar, en, image: image, captionAr: capAr, captionEn: capEn));
 
   void setFiring(bool v) {
     firing = v;
@@ -277,29 +361,52 @@ class JourneyWorld extends ChangeNotifier {
   }
 
   void tapFire() {
-    if (phase == JourneyPhase.flying && fireCooldown <= 0.08) _shoot();
+    if (phase == JourneyPhase.flying && fireCooldown <= 0.06) _shoot();
   }
 
-  void steer(double dx) {
+  /// توجيه بالسحب: [dx] و[dy] بالبكسل.
+  void steer(double dx, [double dy = 0]) {
     if (size.width <= 0) return;
     if (phase != JourneyPhase.flying && phase != JourneyPhase.countdown) return;
-    final margin = 28 / size.width;
-    rocketX = (rocketX + dx / size.width).clamp(margin, 1 - margin);
+    final k = 2 * kMaxX / size.width * 1.15;
+    final nx = (px + dx * k).clamp(-kMaxX, kMaxX);
+    final ny = (py - dy * k).clamp(kMinY, kMaxY);
+    vx = vx * .5 + (nx - px) * 30;
+    vy = vy * .5 + (ny - py) * 30;
+    px = nx;
+    py = ny;
   }
 
   void tick(double dt) {
-    if (size.isEmpty) return;
+    if (size.isEmpty || !ready) return;
     if (dt > .05) dt = .05;
     clock += dt;
     if (factTimer > 0) factTimer -= dt;
-    if (shake > 0) shake = math.max(0, shake - dt * 2.5);
+    if (shake > 0) shake = math.max(0, shake - dt * 2.2);
+    damageFlash = math.max(0, damageFlash - dt * 2);
+    vx *= math.max(0, 1 - dt * 8);
+    vy *= math.max(0, 1 - dt * 8);
+    bank += ((-vx * .045).clamp(-.45, .45) - bank) * math.min(1, dt * 6);
     _updateParticles(dt);
 
     switch (phase) {
       case JourneyPhase.countdown:
+        final before = countdown.ceil();
         countdown -= dt;
-        if (countdown < 1.2) _exhaust(dt, 2.5);
+        final after = countdown.ceil();
+        if (after != before && after >= 1 && after <= 5) sound('beep', .8);
         if (countdown <= 0) {
+          phase = JourneyPhase.liftoff;
+          liftoffT = 0;
+          sound('beep_go');
+          sound('roar');
+          shake = .8;
+        }
+        break;
+      case JourneyPhase.liftoff:
+        liftoffT += dt;
+        shake = math.max(shake, .55);
+        if (liftoffT >= kLiftoffSeconds) {
           phase = JourneyPhase.flying;
           _checkFacts();
         }
@@ -307,14 +414,21 @@ class JourneyWorld extends ChangeNotifier {
       case JourneyPhase.flying:
         _updateFlight(dt);
         break;
-      case JourneyPhase.landing:
-        _updateLanding(dt);
+      case JourneyPhase.arrival:
+        _updateArrival(dt);
         break;
       case JourneyPhase.won:
+        arrivalT += dt;
+        _updateRocks(dt);
+        _updateLasers(dt);
+        break;
       case JourneyPhase.lost:
-        _updateShots(dt);
+        _updateRocks(dt);
+        _updateLasers(dt);
         break;
     }
+    _updateScenery(dt);
+    _updateAmbient(dt);
     notifyListeners();
   }
 
@@ -322,15 +436,32 @@ class JourneyWorld extends ChangeNotifier {
     progress = p;
     final newKm = kmAtProgress(p);
     final v = math.max(1500.0, speedKmhAt((km + newKm) / 2));
-    realSeconds += (newKm - km) / v * 3600;
+    final dtReal = (newKm - km) / v * 3600;
+    realSeconds += dtReal;
+    if (km < 2000) groundAngle += dtReal * 7.6 / kEarthRadiusKm;
     km = newKm;
   }
 
   void _checkFacts() {
-    while (nextFact < _facts.length && km >= _facts[nextFact].km) {
-      final f = _facts[nextFact];
-      showFact(tr(f.ar, f.en));
+    while (nextFact < journeyFacts.length && km >= journeyFacts[nextFact].km) {
+      final f = journeyFacts[nextFact];
+      showFact(f);
       nextFact++;
+      _onMilestone(f.km);
+    }
+  }
+
+  void _onMilestone(double at) {
+    if (at == 330) {
+      scenery.add(_Scenery('iss', const V3(10, -2.5, 170), const V3(0, 0, -30), spin: .05, axis: const V3(0, 1, 0)));
+    } else if (at == 18000) {
+      scenery.add(_Scenery('gps', const V3(-9, 3, 160), const V3(0, 0, -34), spin: .3, axis: const V3(0, 0, 1)));
+    } else if (at == 33000) {
+      scenery.add(_Scenery('geo', const V3(9, -3, 160), const V3(0, 0, -34), spin: .2, axis: const V3(0, 1, 0)));
+    } else if (at == 1000) {
+      engineBurn = 1;
+      sound('roar', .35);
+      shake = .4;
     }
   }
 
@@ -340,299 +471,456 @@ class JourneyWorld extends ChangeNotifier {
     if (!bossFight) {
       _setProgress(math.min(1.0, progress + dt * ramp / kJourneySeconds));
     }
-    scroll += dt * (40 + 260 * ramp);
     _checkFacts();
-    if (time < 5) _exhaust(dt, 3 - time * .5);
+
+    // مراحل الصاروخ
+    if (srbAttached && km >= 45) {
+      srbAttached = false;
+      scenery
+        ..add(_Scenery('srbL', V3(px, py, 0), V3(-4, 1, -26), spin: 1.2, axis: const V3(0, 1, .3)))
+        ..add(_Scenery('srbR', V3(px, py, 0), V3(4, 1, -26), spin: -1.2, axis: const V3(0, 1, -.3)));
+      shake = .5;
+      sound('whoosh', .8);
+    }
+    if (coreAttached && km >= 125) {
+      coreAttached = false;
+      scenery.add(_Scenery('core', V3(px, py, 0), const V3(0, -2.5, -14), spin: .5, axis: const V3(1, 0, .2)));
+      shake = .4;
+      sound('whoosh', .8);
+      engineBurn = .3;
+    }
+    if (!coreAttached) {
+      separationT += dt;
+      deploy = _clamp01(deploy + dt / 3);
+    }
+    // حرق الانتقال إلى القمر بين 1000 و 1600 كم
+    final targetBurn = coreAttached ? 1.0 : (km > 950 && km < 1600 ? 1.0 : .2);
+    engineBurn += (targetBurn - engineBurn) * math.min(1, dt * 2);
 
     if (!bossSpawned && progress >= kBossAt) _spawnBoss();
     if (bossDefeated && progress >= 1) {
-      phase = JourneyPhase.landing;
-      landingT = 0;
-      showFact(tr('الطريق مفتوح! نهبط الآن على سطح القمر…',
-          'The way is clear! Landing on the Moon…'));
+      phase = JourneyPhase.arrival;
+      arrivalT = 0;
+      firing = false;
+      sound('thrusters', .9);
+      showText('إطلاق المحركات للإبطاء… ندخل مدار القمر على ارتفاع 130 كم مثل أرتميس 1',
+          'Braking burn… entering lunar orbit at 130 km, just like Artemis I');
     }
 
-    if (!bossSpawned && progress > .045) {
+    // العقبات
+    if (!bossSpawned) {
       spawnTimer -= dt;
       if (spawnTimer <= 0) {
-        _spawnMonster();
-        spawnTimer = _lerp(1.8, .6, progress) * (.7 + rnd.nextDouble() * .6);
-      }
-    }
-
-    if (km > 100) {
-      meteorTimer -= dt;
-      if (meteorTimer <= 0) {
-        meteorTimer = 3 + rnd.nextDouble() * 5;
-        meteors.add(_Shot(rnd.nextDouble() * size.width, -20,
-            -150 - rnd.nextDouble() * 200, 350 + rnd.nextDouble() * 250));
+        if (km > 60 && km < 115) {
+          _spawnShootingStar();
+          spawnTimer = .9 + rnd.nextDouble() * .8;
+        } else if (km >= 400) {
+          _spawnRock();
+          if (progress > .55 && rnd.nextDouble() < .3) _spawnRock();
+          spawnTimer = _lerp(1.7, .6, progress) * (.7 + rnd.nextDouble() * .6);
+        } else {
+          spawnTimer = .3;
+        }
       }
     }
 
     fireCooldown -= dt;
-    muzzle = math.max(0, muzzle - dt * 9);
     if (firing && fireCooldown <= 0) _shoot();
     invulnerable = math.max(0, invulnerable - dt);
 
-    _updateShots(dt);
-    _updateMonsters(dt);
+    _updateLasers(dt);
+    _updateRocks(dt);
     _collisions();
   }
 
-  void _updateLanding(double dt) {
-    landingT += dt;
-    final t = _clamp01(landingT / 4);
-    scroll += dt * 300 * (1 - t);
-    final ease = t * t * (3 - 2 * t);
-    rocketX = _lerp(rocketX, .5, dt * 2);
-    rocketLift = ease * size.height * .36;
-    rocketScale = 1 - ease * .55;
-    _exhaust(dt, 1.5);
-    _updateShots(dt);
-    if (landingT >= 4.2) {
+  void _updateArrival(double dt) {
+    arrivalT += dt;
+    px = _lerp(px, 0, dt * 1.5);
+    py = _lerp(py, -.6, dt * 1.5);
+    engineBurn += (.15 - engineBurn) * math.min(1, dt);
+    _updateLasers(dt);
+    _updateRocks(dt);
+    if (arrivalFacts == 0 && arrivalT > 3.2) {
+      arrivalFacts = 1;
+      showText('انظر! شروق الأرض فوق أفق القمر — المنظر نفسه الذي صوّره رواد أبولو 8',
+          'Look! Earthrise over the lunar horizon — the view Apollo 8 astronauts photographed',
+          image: 'assets/images/earthrise.jpg', capAr: 'شروق الأرض — أبولو 8، 1968', capEn: 'Earthrise — Apollo 8, 1968');
+    }
+    if (arrivalT >= kArrivalSeconds) {
       phase = JourneyPhase.won;
       score += lives * 100;
-      showFact(tr(
-          'وصلنا! القمر يبعد 384,400 كم، وقطعت أبولو 11 هذه المسافة في نحو 3 أيام',
-          'We made it! The Moon is 384,400 km away — Apollo 11 took about 3 days'));
+      sound('success');
     }
   }
 
   void _shoot() {
-    fireCooldown = .2;
-    muzzle = 1;
-    shots.add(_Shot(rocketPx + 19 * rocketScale, rocketPy - 52 * rocketScale, 0, -780));
-  }
-
-  void _exhaust(double dt, double amount) {
-    final n = (amount * 60 * dt).ceil();
-    for (int i = 0; i < n; i++) {
-      particles.add(_Particle(
-        rocketPx + (rnd.nextDouble() - .5) * 16 * rocketScale,
-        rocketPy + 40 * rocketScale,
-        (rnd.nextDouble() - .5) * 60,
-        120 + rnd.nextDouble() * 120,
-        .6 + rnd.nextDouble() * .7,
-        6 + rnd.nextDouble() * 8,
-        km < 60 ? const Color(0xFFDDDDDD) : const Color(0xFFFFB74D),
-      ));
+    fireCooldown = .17;
+    final nose = V3(px, py, 1.5);
+    const speed = 150.0;
+    // مساعدة تصويب: نحو أقرب صخرة أمام المركبة
+    _Rock? best;
+    var bestD = double.infinity;
+    for (final r in rocks) {
+      if (r.dead || r.pos.z < 3) continue;
+      final dx = r.pos.x - px, dy = r.pos.y - py;
+      final d = math.sqrt(dx * dx + dy * dy);
+      if (d < r.radius * .9 + 1.8 && d < bestD) {
+        bestD = d;
+        best = r;
+      }
     }
+    var dir = const V3(0, 0, 1);
+    if (best != null) {
+      final t = (best.pos.z - nose.z) / (speed - best.vel.z);
+      final target = best.pos + best.vel * t;
+      dir = (target - nose).normalized;
+    }
+    lasers.add(_Laser(nose, dir * speed));
+    sound('laser', .45);
   }
 
-  void _spawnMonster() {
+  void _spawnRock() {
     final roll = rnd.nextDouble();
     int kind;
-    if (progress < .3) {
-      kind = roll < .8 ? 0 : 1;
-    } else if (progress < .65) {
+    if (progress < .35) {
+      kind = roll < .7 ? 0 : 1;
+    } else if (progress < .7) {
       kind = roll < .45 ? 0 : (roll < .85 ? 1 : 2);
     } else {
-      kind = roll < .25 ? 0 : (roll < .6 ? 1 : 2);
+      kind = roll < .3 ? 0 : (roll < .65 ? 1 : 2);
     }
-    const radii = [19.0, 22.0, 24.0];
-    const hps = [1.0, 2.0, 4.0];
-    const speeds = [95.0, 75.0, 58.0];
-    final r = radii[kind];
-    monsters.add(_Monster(
+    final radius = [.75, 1.35, 2.1][kind] * (.85 + rnd.nextDouble() * .3);
+    final aimed = rnd.nextDouble() < .4;
+    final x = aimed ? px + (rnd.nextDouble() - .5) * 2 : (rnd.nextDouble() - .5) * 2 * (kMaxX + 1.5);
+    final y = aimed ? py + (rnd.nextDouble() - .5) * 2 : _lerp(kMinY - 1, kMaxY + 1, rnd.nextDouble());
+    final speed = approachSpeed * (kind == 0 && rnd.nextDouble() < .3 ? 1.7 : 1.0);
+    rocks.add(_Rock(
       kind: kind,
-      x: r + 30 + rnd.nextDouble() * (size.width - 2 * r - 60),
-      y: -r - 10,
-      hp: hps[kind],
-      radius: r,
-      speed: speeds[kind] * (1 + progress * .8),
-      phase: rnd.nextDouble() * math.pi * 2,
-      shootTimer: 1.2 + rnd.nextDouble() * 1.5,
+      pos: V3(x, y, 150),
+      vel: V3((rnd.nextDouble() - .5) * 2, (rnd.nextDouble() - .5) * 1.5, -speed),
+      radius: radius,
+      hp: [1.0, 2.0, 4.0][kind],
+      mesh: rnd.nextInt(6),
+      rnd: rnd,
+    ));
+  }
+
+  void _spawnShootingStar() {
+    final x = (rnd.nextDouble() - .5) * 2 * kMaxX;
+    final y = _lerp(kMinY, kMaxY, rnd.nextDouble());
+    rocks.add(_Rock(
+      kind: 3,
+      pos: V3(x + (rnd.nextBool() ? 6 : -6), y + 4, 140),
+      vel: V3(x > 0 ? -2.0 : 2.0, -1.2, -approachSpeed * 1.4),
+      radius: .45,
+      hp: 1,
+      mesh: rnd.nextInt(6),
+      rnd: rnd,
     ));
   }
 
   void _spawnBoss() {
     bossSpawned = true;
-    monsters.add(_Monster(
-      kind: 3,
-      x: size.width / 2,
-      y: -80,
+    rocks.add(_Rock(
+      kind: 4,
+      pos: const V3(0, 9, 170),
+      vel: const V3(0, 0, -20),
+      radius: 12,
       hp: 30,
-      radius: 52,
-      speed: 0,
-      phase: 0,
-      shootTimer: 2,
+      mesh: 6,
+      rnd: rnd,
     ));
-    showFact(tr('وحش القمر العملاق يسدّ الطريق! اهزمه لتتمكن من الهبوط',
-        'The giant Moon monster blocks the way! Defeat it to land'));
+    sound('warning');
+    showText('كويكب عملاق يسدّ الطريق إلى القمر! حطّمه بالليزر لتتمكن من الوصول',
+        'A giant asteroid blocks the way to the Moon! Blast it with your laser to get through');
   }
 
-  void _updateShots(double dt) {
-    for (final s in shots) {
-      s.x += s.vx * dt;
-      s.y += s.vy * dt;
-      if (s.y < -30) s.dead = true;
+  void _updateLasers(double dt) {
+    for (final s in lasers) {
+      s.prev = s.pos;
+      s.pos = s.pos + s.vel * dt;
+      s.age += dt;
+      if (s.pos.z > 190 || s.age > 1.6) s.dead = true;
     }
-    for (final s in enemyShots) {
-      s.x += s.vx * dt;
-      s.y += s.vy * dt;
-      if (s.y > size.height + 20 || s.y < -40 || s.x < -20 || s.x > size.width + 20) {
-        s.dead = true;
-      }
-    }
-    for (final s in meteors) {
-      s.x += s.vx * dt;
-      s.y += s.vy * dt;
-      if (s.y > size.height + 60) s.dead = true;
-    }
-    shots.removeWhere((s) => s.dead);
-    enemyShots.removeWhere((s) => s.dead);
-    meteors.removeWhere((s) => s.dead);
+    lasers.removeWhere((s) => s.dead);
   }
 
-  void _fireAt(_Monster m, double angle, double speed) {
-    enemyShots.add(_Shot(m.x, m.y + m.radius * .6,
-        math.cos(angle) * speed, math.sin(angle) * speed));
-  }
-
-  void _updateMonsters(double dt) {
-    final w = size.width, h = size.height;
-    for (final m in monsters) {
+  void _updateRocks(double dt) {
+    final pp = probePos;
+    final thrown = <_Rock>[];
+    for (final m in rocks) {
       m.age += dt;
       m.hitFlash = math.max(0, m.hitFlash - dt * 5);
+      m.ax += m.sx * dt;
+      m.ay += m.sy * dt;
+      m.az += m.sz * dt;
       if (m.isBoss) {
-        m.y += (h * .22 - m.y) * dt * 1.2;
-        m.x = w / 2 + math.sin(m.age * .9) * w * .3;
-        m.shootTimer -= dt;
-        if (m.shootTimer <= 0 && m.y > h * .1) {
-          final rage = m.hp < m.maxHp / 2;
-          m.shootTimer = rage ? .8 : 1.2;
-          final aim = math.atan2(rocketPy - m.y, rocketPx - m.x);
-          final n = rage ? 7 : 5;
-          for (int i = 0; i < n; i++) {
-            _fireAt(m, aim + (i - (n - 1) / 2) * .2, 210);
+        final tz = 52.0;
+        final z = m.pos.z + (tz - m.pos.z) * math.min(1, dt * .8);
+        m.pos = V3(math.sin(m.age * .5) * 4, 9 + math.sin(m.age * .37) * 1.5, z);
+        if (phase == JourneyPhase.flying && m.pos.z < 70) {
+          m.throwTimer -= dt;
+          if (m.throwTimer <= 0) {
+            final rage = m.hp < m.maxHp / 2;
+            m.throwTimer = rage ? 1.0 : 1.5;
+            for (int i = 0; i < (rage ? 2 : 1); i++) {
+              final from = m.pos + V3((rnd.nextDouble() - .5) * 4, (rnd.nextDouble() - .5) * 4, -m.radius * .8);
+              final aim = pp + V3((rnd.nextDouble() - .5) * 2.5, (rnd.nextDouble() - .5) * 2.5, 0);
+              thrown.add(_Rock(
+                kind: 0,
+                pos: from,
+                vel: (aim - from).normalized * 30,
+                radius: .55 + rnd.nextDouble() * .3,
+                hp: 1,
+                mesh: rnd.nextInt(6),
+                rnd: rnd,
+              ));
+            }
           }
         }
         continue;
       }
-      m.y += m.speed * dt;
-      switch (m.kind) {
-        case 0:
-          m.x += math.sin(m.age * 3 + m.phase) * 30 * dt;
-          break;
-        case 1:
-          m.x = m.baseX + math.sin(m.age * 2.2 + m.phase) * 45;
-          break;
-        case 2:
-          m.shootTimer -= dt;
-          if (m.shootTimer <= 0 && m.y < h * .6) {
-            m.shootTimer = 1.8 + rnd.nextDouble();
-            _fireAt(m, math.atan2(rocketPy - m.y, rocketPx - m.x), 230);
-          }
-          break;
+      m.pos = m.pos + m.vel * dt;
+      if (m.kind == 3) {
+        // الشهاب يحترق ويترك أثراً متوهجاً
+        if (rnd.nextDouble() < .8) {
+          particles.add(_Particle(m.pos, m.vel * .1 + V3(rnd.nextDouble() - .5, rnd.nextDouble() - .5, 0), .45, .35 + rnd.nextDouble() * .3,
+              const Color(0xFFFFB04A)));
+        }
       }
-      m.x = m.x.clamp(m.radius, w - m.radius);
-      if (m.y > h + 50) m.dead = true;
+      if (!m.passed && m.pos.z < -2) {
+        m.passed = true;
+        final dx = m.pos.x - px, dy = m.pos.y - py;
+        if (dx * dx + dy * dy < 16 && phase == JourneyPhase.flying) sound('whoosh', .5);
+      }
+      if (m.pos.z < -16) m.dead = true;
     }
-    monsters.removeWhere((m) => m.dead);
+    rocks
+      ..removeWhere((m) => m.dead)
+      ..addAll(thrown);
   }
 
   void _collisions() {
-    for (final s in shots) {
-      for (final m in monsters) {
-        if (m.dead) continue;
-        final dx = s.x - m.x, dy = s.y - m.y;
-        if (dx * dx + dy * dy < (m.radius + 5) * (m.radius + 5)) {
+    for (final s in lasers) {
+      for (final m in rocks) {
+        if (m.dead || s.dead) continue;
+        // أقرب نقطة على مسار الشعاع خلال هذا الإطار
+        final seg = s.pos - s.prev;
+        final l2 = seg.dot(seg);
+        final t = l2 == 0 ? 0.0 : _clamp01((m.pos - s.prev).dot(seg) / l2);
+        final c = s.prev + seg * t;
+        final d = (m.pos - c).length;
+        if (d < m.radius * 1.05 + .3) {
           s.dead = true;
           m.hp -= 1;
           m.hitFlash = 1;
-          _burst(s.x, s.y, 5, const Color(0xFFFFF59D), 120);
-          if (m.hp <= 0) _kill(m);
+          _sparks(c, 8, const Color(0xFF9EF6FF), 10);
+          if (m.hp <= 0) _destroy(m);
           break;
         }
       }
     }
-    shots.removeWhere((s) => s.dead);
+    lasers.removeWhere((s) => s.dead);
 
-    if (invulnerable <= 0) {
-      final rx = rocketPx, ry = rocketPy;
-      for (final m in monsters) {
-        final dx = m.x - rx, dy = m.y - ry;
-        final rr = m.radius + 16;
+    if (invulnerable <= 0 && phase == JourneyPhase.flying) {
+      for (final m in rocks) {
+        if (m.dead || m.isBoss) continue;
+        if (m.pos.z.abs() > m.radius + .7) continue;
+        final dx = m.pos.x - px, dy = m.pos.y - py;
+        final rr = m.radius * .8 + .7;
         if (dx * dx + dy * dy < rr * rr) {
-          if (!m.isBoss) {
-            m.dead = true;
-            _burst(m.x, m.y, 18, _monsterColor(m.kind), 220);
-          }
-          _hitRocket();
+          m.dead = true;
+          _explode(m.pos, m.radius, m.kind == 3);
+          _hitProbe();
           break;
         }
       }
     }
-    if (invulnerable <= 0) {
-      for (final s in enemyShots) {
-        final dx = s.x - rocketPx, dy = s.y - (rocketPy - 6);
-        if (dx * dx + dy * dy < 17 * 17) {
-          s.dead = true;
-          _hitRocket();
-          break;
-        }
-      }
-    }
-    monsters.removeWhere((m) => m.dead);
-    enemyShots.removeWhere((s) => s.dead);
+    rocks.removeWhere((m) => m.dead);
   }
 
-  void _kill(_Monster m) {
+  void _destroy(_Rock m) {
     m.dead = true;
     kills++;
-    const points = [10, 20, 35, 500];
+    const points = [10, 20, 35, 15, 500];
     score += points[m.kind];
-    _burst(m.x, m.y, m.isBoss ? 90 : 26, _monsterColor(m.kind), m.isBoss ? 380 : 230);
-    _burst(m.x, m.y, m.isBoss ? 40 : 10, Colors.white, m.isBoss ? 250 : 150);
+    _explode(m.pos, m.radius, m.kind == 3);
+    if (m.kind == 1 || m.kind == 2) {
+      // الصخرة تتفتت إلى قطع أصغر
+      final n = m.kind == 1 ? 2 : 3;
+      for (int i = 0; i < n; i++) {
+        final a = i / n * math.pi * 2 + rnd.nextDouble();
+        rocks.add(_Rock(
+          kind: 0,
+          pos: m.pos + V3(math.cos(a), math.sin(a), 0) * m.radius * .6,
+          vel: m.vel + V3(math.cos(a) * 5, math.sin(a) * 5, 0),
+          radius: m.radius * .45,
+          hp: 1,
+          mesh: rnd.nextInt(6),
+          rnd: rnd,
+        ));
+      }
+    }
     if (m.isBoss) {
       bossDefeated = true;
-      shake = 1.2;
-      enemyShots.clear();
-      showFact(tr('هزمت وحش القمر! أحسنت يا رائد الفضاء',
-          'You beat the Moon monster! Great job, astronaut'));
+      shake = 1.4;
+      for (final r in rocks) {
+        if (!r.isBoss && r.pos.z > 0) {
+          r.dead = true;
+          _explode(r.pos, r.radius, false);
+        }
+      }
+      for (int i = 0; i < 4; i++) {
+        _explode(m.pos + V3((rnd.nextDouble() - .5) * 6, (rnd.nextDouble() - .5) * 6, 0), 3, false);
+      }
+      showText('حطّمت الكويكب العملاق! الطريق إلى القمر مفتوح الآن',
+          'You smashed the giant asteroid! The way to the Moon is clear');
     }
   }
 
-  void _hitRocket() {
+  void _hitProbe() {
     lives--;
     invulnerable = 1.8;
     shake = 1;
-    _burst(rocketPx, rocketPy, 20, const Color(0xFFFF7043), 200);
+    damageFlash = 1;
+    sound('hit');
+    _sparks(probePos, 24, const Color(0xFFFF8A50), 9);
     if (lives <= 0) {
       phase = JourneyPhase.lost;
       firing = false;
-      _burst(rocketPx, rocketPy, 80, const Color(0xFFFFA726), 320);
-      _burst(rocketPx, rocketPy, 40, Colors.white, 200);
+      _explode(probePos, 2.5, false);
+      _sparks(probePos, 60, const Color(0xFFFFD27A), 14);
     }
   }
 
-  void _burst(double x, double y, int n, Color c, double speed) {
+  void _explode(V3 at, double r, bool hot) {
+    sound('explosion', (.35 + r * .25).clamp(.3, 1.0));
+    particles.add(_Particle(at, V3.zero, .35, r * 2.6, const Color(0xFFFFF1C4)));
+    final n = (10 + r * 14).round();
     for (int i = 0; i < n; i++) {
-      final a = rnd.nextDouble() * math.pi * 2;
-      final v = speed * (.3 + rnd.nextDouble() * .7);
-      particles.add(_Particle(x, y, math.cos(a) * v, math.sin(a) * v,
-          .4 + rnd.nextDouble() * .6, 2 + rnd.nextDouble() * 4, c));
+      final d = V3(rnd.nextDouble() - .5, rnd.nextDouble() - .5, rnd.nextDouble() - .5).normalized;
+      final v = d * (r * (3 + rnd.nextDouble() * 6));
+      particles.add(_Particle(at + d * r * .4, v, .7 + rnd.nextDouble() * .8, r * (.08 + rnd.nextDouble() * .14),
+          hot ? const Color(0xFFFFB04A) : const Color(0xFF9A8F84),
+          drag: .4, glow: hot));
+    }
+    _sparks(at, (6 + r * 6).round(), const Color(0xFFFFC66B), 6 + r * 3);
+  }
+
+  void _sparks(V3 at, int n, Color c, double speed) {
+    for (int i = 0; i < n; i++) {
+      final d = V3(rnd.nextDouble() - .5, rnd.nextDouble() - .5, rnd.nextDouble() - .5).normalized;
+      particles.add(_Particle(at, d * speed * (.4 + rnd.nextDouble() * .6), .25 + rnd.nextDouble() * .35, .12 + rnd.nextDouble() * .12, c));
     }
   }
 
   void _updateParticles(double dt) {
     for (final p in particles) {
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vx *= 1 - dt * 1.5;
-      p.vy *= 1 - dt * 1.5;
+      p.pos = p.pos + p.vel * dt;
+      p.vel = p.vel * math.max(0, 1 - dt * p.drag);
       p.life -= dt;
     }
     particles.removeWhere((p) => p.life <= 0);
+    if (particles.length > 900) particles.removeRange(0, particles.length - 900);
+  }
+
+  void _updateScenery(double dt) {
+    for (final s in scenery) {
+      s.pos = s.pos + s.vel * dt;
+      s.angle += s.spin * dt;
+      if (s.kind == 'core' || s.kind.startsWith('srb')) s.vel = s.vel + const V3(0, -1.5, -3) * dt;
+    }
+    scenery.removeWhere((s) => s.pos.z < -60 || s.pos.y < -60);
+  }
+
+  /// غيوم، غبار فضائي، ونار العادم.
+  void _updateAmbient(double dt) {
+    final v = approachSpeed;
+    // غيوم أثناء الصعود
+    if ((phase == JourneyPhase.flying) && km < 11) {
+      puffTimer -= dt;
+      if (puffTimer <= 0) {
+        puffTimer = .09;
+        puffs.add(_Puff(V3((rnd.nextDouble() - .5) * 70, -5 + rnd.nextDouble() * 14 - km * 2.2, 120), 5 + rnd.nextDouble() * 8));
+      }
+    }
+    for (final p in puffs) {
+      p.pos = p.pos + V3(0, -6 - km * .8, -v * 2.4) * dt;
+    }
+    puffs.removeWhere((p) => p.pos.z < -20);
+
+    for (int i = 0; i < dust.length; i++) {
+      var d = dust[i];
+      d = d + V3(0, 0, -v * 1.6 * dt);
+      if (d.z < -12) d = V3((rnd.nextDouble() - .5) * 30, (rnd.nextDouble() - .5) * 20, 100 + rnd.nextDouble() * 10);
+      dust[i] = d;
+    }
+
+    // عادم المحرك
+    if (phase == JourneyPhase.flying || phase == JourneyPhase.liftoff || phase == JourneyPhase.arrival) {
+      if (coreAttached) {
+        final inAir = km < 40;
+        final rot = probeRot;
+        final base = probePos;
+        for (int k = 0; k < 3; k++) {
+          final off = V3((rnd.nextDouble() - .5) * .8, (rnd.nextDouble() - .5) * .8, 0);
+          particles.add(_Particle(base + rot.apply(V3(off.x, off.y, -7.9)), rot.apply(V3(off.x * 4, off.y * 4, -40 - rnd.nextDouble() * 20)),
+              inAir ? 1.2 : .7, inAir ? 1.1 + rnd.nextDouble() : .8, inAir ? const Color(0xFFD8D2CA) : const Color(0xFFFFB45A),
+              drag: inAir ? 1.5 : .3, glow: !inAir));
+        }
+        if (srbAttached) {
+          for (final s in [-1.0, 1.0]) {
+            particles.add(_Particle(base + rot.apply(V3(s, 0, -8)), rot.apply(V3(s * 2, (rnd.nextDouble() - .5) * 3, -45)), 1.4,
+                1.4 + rnd.nextDouble(), const Color(0xFFE8E2DA), drag: 1.6, glow: false));
+          }
+        }
+      } else if (engineBurn > .35 && rnd.nextDouble() < engineBurn) {
+        particles.add(_Particle(V3(px, py, -1.25), V3((rnd.nextDouble() - .5) * 2, (rnd.nextDouble() - .5) * 2, -22), .35, .35,
+            const Color(0xFF8FB8FF)));
+      }
+    }
   }
 }
 
-Color _monsterColor(int kind) => const [
-      Color(0xFF66BB6A),
-      Color(0xFFAB47BC),
-      Color(0xFFEF5350),
-      Color(0xFF7E57C2),
-    ][kind];
+// ---------------------------------------------------------------------------
+// الهندسة السماوية (اتجاهات الأجرام وأحجامها الظاهرية الحقيقية)
+// ---------------------------------------------------------------------------
+
+/// اتجاه الشمس (من الأجسام نحو الشمس) — خلف المركبة ومن الأعلى يساراً.
+final V3 kSunDir = const V3(-.86, .42, -.2).normalized;
+final V3 _moonDirFlight = const V3(.16, .1, 1).normalized;
+final V3 _moonDirOrbit = const V3(0, -1, .36).normalized;
+
+class SkyState {
+  final V3 earthDir;
+  final double earthAlpha; // نصف القطر الزاوي (راديان)
+  final V3 moonDir;
+  final double moonAlpha;
+  final double earthDistKm;
+  final double moonDistKm;
+  const SkyState(this.earthDir, this.earthAlpha, this.moonDir, this.moonAlpha, this.earthDistKm, this.moonDistKm);
+}
+
+SkyState skyFor(JourneyWorld w) {
+  final km = w.km;
+  if (w.phase == JourneyPhase.arrival || w.phase == JourneyPhase.won || (w.phase == JourneyPhase.lost && w.progress >= 1)) {
+    final u = _smooth(0, 4.5, w.arrivalT);
+    final moonDir = V3.lerp(_moonDirFlight, _moonDirOrbit, u).normalized;
+    final moonAlpha = angularRadius(kMoonRadiusKm, kMoonRadiusKm + kLunarOrbitKm);
+    final rise = _smooth(2.5, 8.5, w.arrivalT);
+    final earthDir = V3(-.32, _lerp(-.3, .1, rise), 1).normalized;
+    return SkyState(earthDir, angularRadius(kEarthRadiusKm, kEarthMoonKm) * 2.6, moonDir, moonAlpha, kEarthMoonKm, kMoonRadiusKm + kLunarOrbitKm);
+  }
+  // الأرض: تحتنا في المدار المنخفض، ثم تنتقل خلفنا بعد الانطلاق نحو القمر
+  final behind = _smooth(math.log(900), math.log(30000), math.log(km + 1));
+  final earthDir = V3.lerp(const V3(0, -1, 0), const V3(0, -.35, -1).normalized, behind).normalized;
+  final ed = kEarthRadiusKm + km;
+  final md = math.max(kMoonRadiusKm + kLunarOrbitKm, kEarthMoonKm - km);
+  // القمر يُكبّر قليلاً للعرض عندما يكون بعيداً، ثم يعود لحجمه الحقيقي عند الاقتراب
+  final mag = 1 + 2 * (1 - _smooth(.88, .99, w.progress));
+  final moonAlpha = math.min(1.2, angularRadius(kMoonRadiusKm, md) * mag);
+  return SkyState(earthDir, angularRadius(kEarthRadiusKm, ed), _moonDirFlight, moonAlpha, ed, md);
+}
 
 // ---------------------------------------------------------------------------
 // الصفحة
@@ -645,44 +933,74 @@ class RocketJourneyPage extends StatefulWidget {
   /// تُبنى الصفحة التالية (مستويات الأسئلة) بعد الوصول للقمر.
   final Widget Function(int score) buildNext;
 
+  /// تحميل الصور والأصوات (يُعطّل في الاختبارات).
+  final bool loadMedia;
+
   const RocketJourneyPage({
     super.key,
     required this.arabic,
     required this.tr,
     required this.buildNext,
+    this.loadMedia = true,
   });
 
   @override
   State<RocketJourneyPage> createState() => _RocketJourneyPageState();
 }
 
-class _RocketJourneyPageState extends State<RocketJourneyPage>
-    with SingleTickerProviderStateMixin {
+class _RocketJourneyPageState extends State<RocketJourneyPage> with SingleTickerProviderStateMixin {
   late JourneyWorld world;
   late final Ticker _ticker;
   Duration _last = Duration.zero;
+  SpaceArt art = SpaceArt();
+  late final SpaceAudio audio;
+  late final JourneyScene scene;
 
   @override
   void initState() {
     super.initState();
-    world = JourneyWorld(arabic: widget.arabic);
+    world = _newWorld();
+    audio = SpaceAudio(enabled: widget.loadMedia);
+    scene = JourneyScene();
     _ticker = createTicker(_onTick)..start();
+    if (widget.loadMedia) _loadMedia();
+  }
+
+  JourneyWorld _newWorld() => JourneyWorld(arabic: widget.arabic)..ready = !widget.loadMedia || art.loaded;
+
+  Future<void> _loadMedia() async {
+    final results = await Future.wait([SpaceArt.load(), audio.init()]);
+    if (!mounted) {
+      (results[0] as SpaceArt).dispose();
+      return;
+    }
+    setState(() {
+      art = results[0] as SpaceArt;
+      world.ready = true;
+    });
   }
 
   void _onTick(Duration elapsed) {
     final dt = (elapsed - _last).inMicroseconds / 1e6;
     _last = elapsed;
     world.tick(dt);
+    for (final (id, v) in world.sounds) {
+      audio.play(id, volume: v);
+    }
+    world.sounds.clear();
+    audio.levels(roar: world.roarLevel, ambience: world.ambienceLevel, engine: world.engineLevel);
   }
 
   void _restart() {
+    audio.stopAll();
     setState(() {
       world.dispose();
-      world = JourneyWorld(arabic: widget.arabic);
+      world = _newWorld();
     });
   }
 
   void _continue() {
+    audio.stopAll();
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (_) => widget.buildNext(world.score)),
@@ -693,6 +1011,9 @@ class _RocketJourneyPageState extends State<RocketJourneyPage>
   void dispose() {
     _ticker.dispose();
     world.dispose();
+    audio.stopAll();
+    audio.dispose();
+    art.dispose();
     super.dispose();
   }
 
@@ -705,25 +1026,35 @@ class _RocketJourneyPageState extends State<RocketJourneyPage>
         backgroundColor: Colors.black,
         body: LayoutBuilder(builder: (context, c) {
           world.size = Size(c.maxWidth, c.maxHeight);
+          final pad = MediaQuery.of(context).padding;
           return Stack(
             fit: StackFit.expand,
             children: [
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onPanUpdate: (d) => world.steer(d.delta.dx),
+                onPanUpdate: (d) => world.steer(d.delta.dx, d.delta.dy),
                 onTapDown: (_) => world.tapFire(),
                 child: RepaintBoundary(
-                  child: CustomPaint(painter: JourneyPainter(world)),
+                  child: CustomPaint(painter: JourneyPainter(world, art, scene, bottomPad: pad.bottom)),
                 ),
               ),
               AnimatedBuilder(
                 animation: world,
-                builder: (context, _) => _Hud(world: world, tr: tr),
+                builder: (context, _) => _LaunchPhotos(world: world, tr: tr),
+              ),
+              AnimatedBuilder(
+                animation: world,
+                builder: (context, _) => _Hud(
+                  world: world,
+                  tr: tr,
+                  muted: audio.muted,
+                  onMute: () => setState(() => audio.setMuted(!audio.muted)),
+                ),
               ),
               Positioned(
                 right: 18,
-                bottom: 26,
-                child: _FireButton(world: world, label: tr('مسدس', 'Pistol')),
+                bottom: 26 + pad.bottom,
+                child: _FireButton(world: world, label: tr('ليزر', 'Laser')),
               ),
               AnimatedBuilder(
                 animation: world,
@@ -739,6 +1070,18 @@ class _RocketJourneyPageState extends State<RocketJourneyPage>
   Widget _overlay(String Function(String, String) tr) {
     switch (world.phase) {
       case JourneyPhase.countdown:
+        if (!world.ready) {
+          return Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircularProgressIndicator(),
+                const SizedBox(height: 14),
+                Text(tr('جارٍ تجهيز المركبة…', 'Preparing the spacecraft…')),
+              ],
+            ),
+          );
+        }
         final n = world.countdown.ceil();
         return IgnorePointer(
           child: Center(
@@ -747,34 +1090,48 @@ class _RocketJourneyPageState extends State<RocketJourneyPage>
               children: [
                 Text(
                   tr('المرحلة 1: من الأرض إلى القمر', 'Stage 1: Earth to Moon'),
-                  style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
-                      shadows: [Shadow(blurRadius: 10)]),
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, shadows: [Shadow(blurRadius: 10)]),
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  n > 3 ? '' : (n <= 0 ? tr('انطلق!', 'Go!') : '$n'),
+                  n > 5 ? '' : 'T-$n',
                   style: const TextStyle(
-                      fontSize: 90,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.amber,
-                      shadows: [Shadow(blurRadius: 18)]),
+                      fontSize: 84, fontWeight: FontWeight.w900, color: Colors.amber, shadows: [Shadow(blurRadius: 18)]),
                 ),
               ],
             ),
           ),
         );
+      case JourneyPhase.liftoff:
+        return IgnorePointer(
+          child: Center(
+            child: Text(
+              tr('انطلاق!', 'Liftoff!'),
+              style: const TextStyle(
+                  fontSize: 64, fontWeight: FontWeight.w900, color: Colors.amber, shadows: [Shadow(blurRadius: 18)]),
+            ),
+          ),
+        );
       case JourneyPhase.won:
+        if (world.arrivalT < kArrivalSeconds + 1.2) return const SizedBox.shrink();
         return _EndCard(
+          image: 'assets/images/earthrise.jpg',
           icon: Icons.emoji_events,
           color: Colors.amber,
-          title: tr('هبطت على القمر!', 'You landed on the Moon!'),
+          title: tr('وصلت إلى القمر!', 'You reached the Moon!'),
           lines: [
             '${tr('النقاط', 'Score')}: ${world.score}',
-            '${tr('الوحوش المهزومة', 'Monsters defeated')}: ${world.kills}',
+            '${tr('الصخور المحطمة', 'Rocks smashed')}: ${world.kills}',
             '${tr('زمن الرحلة الحقيقي', 'Real mission time')}: ${_missionTime(world, tr)}',
           ],
+          extra: widget.loadMedia
+              ? TextButton.icon(
+                  onPressed: () => audio.play('eagle'),
+                  icon: const Icon(Icons.record_voice_over),
+                  label: Text(tr('استمع لصوت أبولو 11 الحقيقي: "The Eagle has landed"',
+                      'Hear the real Apollo 11 call: "The Eagle has landed"')),
+                )
+              : null,
           primary: tr('تابع إلى المستويات', 'Continue to levels'),
           onPrimary: _continue,
           secondary: tr('العب مجدداً', 'Play again'),
@@ -784,7 +1141,7 @@ class _RocketJourneyPageState extends State<RocketJourneyPage>
         return _EndCard(
           icon: Icons.rocket_launch,
           color: Colors.redAccent,
-          title: tr('تحطم الصاروخ!', 'Rocket destroyed!'),
+          title: tr('تحطمت المركبة!', 'Spacecraft destroyed!'),
           lines: [
             '${tr('المسافة المقطوعة', 'Distance travelled')}: ${formatInt(world.km)} ${tr('كم', 'km')}',
             '${tr('النقاط', 'Score')}: ${world.score}',
@@ -802,29 +1159,113 @@ class _RocketJourneyPageState extends State<RocketJourneyPage>
 
 String _missionTime(JourneyWorld w, String Function(String, String) tr) {
   final total = w.realSeconds.round();
-  final h = total ~/ 3600;
+  final d = total ~/ 86400;
+  final h = (total % 86400) ~/ 3600;
   final m = (total % 3600) ~/ 60;
-  return '$h${tr('س', 'h')} ${m.toString().padLeft(2, '0')}${tr('د', 'm')}';
+  final hm = '$h${tr('س', 'h')} ${m.toString().padLeft(2, '0')}${tr('د', 'm')}';
+  return d > 0 ? '$d${tr('ي', 'd')} $hm' : hm;
+}
+
+/// الصور الحقيقية للصاروخ على منصة الإطلاق ثم لحظة الانطلاق.
+class _LaunchPhotos extends StatelessWidget {
+  final JourneyWorld world;
+  final String Function(String, String) tr;
+  const _LaunchPhotos({required this.world, required this.tr});
+
+  @override
+  Widget build(BuildContext context) {
+    final w = world;
+    if (!w.ready) return const SizedBox.shrink();
+    double opacity;
+    String image;
+    double scale;
+    String caption;
+    Offset jitter = Offset.zero;
+    switch (w.phase) {
+      case JourneyPhase.countdown:
+        image = 'assets/images/launch_pad.jpg';
+        opacity = 1;
+        scale = 1.05 + (kCountdownSeconds - w.countdown) * .02;
+        caption = tr('صورة حقيقية: صاروخ SLS ومركبة أوريون على منصة الإطلاق 39B — مركز كينيدي، ناسا',
+            'Real photo: SLS rocket and Orion on Launch Pad 39B — NASA Kennedy Space Center');
+        break;
+      case JourneyPhase.liftoff:
+        image = 'assets/images/liftoff.jpg';
+        opacity = 1;
+        scale = 1.1 + w.liftoffT * .06;
+        jitter = Offset(math.sin(w.clock * 70) * 4, math.cos(w.clock * 55) * 4);
+        caption = tr('صورة حقيقية: إطلاق أرتميس 1 — ناسا', 'Real photo: Artemis I liftoff — NASA');
+        break;
+      case JourneyPhase.flying:
+        if (w.time > 1.2) return const SizedBox.shrink();
+        image = 'assets/images/liftoff.jpg';
+        opacity = 1 - w.time / 1.2;
+        scale = 1.26 + w.time * .3;
+        caption = '';
+        break;
+      default:
+        return const SizedBox.shrink();
+    }
+    return IgnorePointer(
+      child: Opacity(
+        opacity: _clamp01(opacity),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            ClipRect(
+              child: Transform.translate(
+                offset: jitter,
+                child: Transform.scale(
+                  scale: scale,
+                  child: Image.asset(image, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+                ),
+              ),
+            ),
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Color(0x99000000), Color(0x00000000), Color(0x00000000), Color(0xCC000000)],
+                  stops: [0, .25, .7, 1],
+                ),
+              ),
+            ),
+            if (caption.isNotEmpty)
+              Positioned(
+                left: 16,
+                right: 110,
+                bottom: 34 + MediaQuery.of(context).padding.bottom,
+                child: Text(caption, style: const TextStyle(fontSize: 13, color: Colors.white70, height: 1.35)),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _Hud extends StatelessWidget {
   final JourneyWorld world;
   final String Function(String, String) tr;
-  const _Hud({required this.world, required this.tr});
+  final bool muted;
+  final VoidCallback onMute;
+  const _Hud({required this.world, required this.tr, required this.muted, required this.onMute});
 
   @override
   Widget build(BuildContext context) {
     final w = world;
     final frac = _clamp01(w.km / kEarthMoonKm);
     const small = TextStyle(fontSize: 12, color: Colors.white70);
+    final f = w.fact;
     return SafeArea(
       child: Column(
         children: [
           Container(
             margin: const EdgeInsets.fromLTRB(8, 6, 8, 0),
-            padding: const EdgeInsets.fromLTRB(4, 4, 12, 8),
+            padding: const EdgeInsets.fromLTRB(4, 2, 12, 8),
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(.45),
+              color: Colors.black.withValues(alpha: .45),
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: Colors.white12),
             ),
@@ -832,39 +1273,33 @@ class _Hud extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    IconButton(
-                      onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.arrow_back),
-                    ),
+                    IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.arrow_back)),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
                             '${formatInt(w.km)} / ${formatInt(kEarthMoonKm)} ${tr('كم', 'km')}',
-                            style: const TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.bold),
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                           ),
                           Text(w.zoneName, style: small),
                         ],
                       ),
                     ),
+                    IconButton(
+                      onPressed: onMute,
+                      icon: Icon(muted ? Icons.volume_off : Icons.volume_up, size: 20),
+                      visualDensity: VisualDensity.compact,
+                    ),
                     Row(
                       children: List.generate(
                         3,
-                        (i) => Icon(
-                          i < w.lives ? Icons.favorite : Icons.favorite_border,
-                          color: Colors.redAccent,
-                          size: 20,
-                        ),
+                        (i) => Icon(i < w.lives ? Icons.shield : Icons.shield_outlined, color: Colors.lightBlueAccent, size: 19),
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 8),
                     Text('${w.score}',
-                        style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w900,
-                            color: Colors.amber)),
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.amber)),
                   ],
                 ),
                 Padding(
@@ -894,10 +1329,7 @@ class _Hud extends StatelessWidget {
                   padding: const EdgeInsetsDirectional.only(start: 12),
                   child: Row(
                     children: [
-                      Text(
-                        '${tr('السرعة', 'Speed')}: ${formatInt(w.speedKmh)} ${tr('كم/س', 'km/h')}',
-                        style: small,
-                      ),
+                      Text('${tr('السرعة', 'Speed')}: ${formatInt(w.speedKmh)} ${tr('كم/س', 'km/h')}', style: small),
                       const Spacer(),
                       Text('T+ ${_missionTime(w, tr)}', style: small),
                     ],
@@ -912,9 +1344,8 @@ class _Hud extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 2),
               child: Column(
                 children: [
-                  Text(tr('وحش القمر العملاق', 'Giant Moon Monster'),
-                      style: const TextStyle(
-                          fontWeight: FontWeight.bold, color: Colors.purpleAccent)),
+                  Text(tr('الكويكب العملاق', 'Giant asteroid'),
+                      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.orangeAccent)),
                   const SizedBox(height: 3),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(6),
@@ -922,43 +1353,69 @@ class _Hud extends StatelessWidget {
                       value: w.boss!.hp / w.boss!.maxHp,
                       minHeight: 8,
                       backgroundColor: Colors.white12,
-                      color: Colors.purpleAccent,
+                      color: Colors.orangeAccent,
                     ),
                   ),
                 ],
               ),
             ),
           AnimatedOpacity(
-            opacity: w.factTimer > 0 ? 1 : 0,
+            opacity: w.factTimer > 0 && f != null ? 1 : 0,
             duration: const Duration(milliseconds: 350),
             child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 16),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              margin: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: const Color(0xFF0D2745).withOpacity(.85),
+                color: const Color(0xFF0D2745).withValues(alpha: .86),
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.lightBlueAccent.withOpacity(.5)),
+                border: Border.all(color: Colors.lightBlueAccent.withValues(alpha: .5)),
               ),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.auto_awesome, color: Colors.amber, size: 20),
-                  const SizedBox(width: 8),
+                  if (f?.image != null) ...[
+                    Column(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: Image.asset(f!.image!, width: 92, height: 92, fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const SizedBox(width: 92, height: 92)),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(tr('صورة حقيقية: ناسا', 'Real photo: NASA'),
+                            style: const TextStyle(fontSize: 9, color: Colors.white54)),
+                      ],
+                    ),
+                    const SizedBox(width: 10),
+                  ] else ...[
+                    const Icon(Icons.auto_awesome, color: Colors.amber, size: 20),
+                    const SizedBox(width: 8),
+                  ],
                   Expanded(
-                    child: Text(w.factText,
-                        style: const TextStyle(fontSize: 14, height: 1.35)),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(w.factText, style: const TextStyle(fontSize: 14, height: 1.35)),
+                        if (f?.captionAr != null) ...[
+                          const SizedBox(height: 4),
+                          Text(tr(f!.captionAr!, f.captionEn ?? f.captionAr!),
+                              style: const TextStyle(fontSize: 11, color: Colors.lightBlueAccent)),
+                        ],
+                      ],
+                    ),
                   ),
                 ],
               ),
             ),
           ),
           const Spacer(),
-          if (w.phase == JourneyPhase.flying && w.time < 6)
+          if (w.phase == JourneyPhase.flying && w.time < 7)
             Padding(
-              padding: const EdgeInsets.only(bottom: 110),
+              padding: const EdgeInsets.only(bottom: 120),
               child: Text(
-                tr('↔ اسحب لتوجيه الصاروخ', '↔ Drag to steer the rocket'),
-                style: const TextStyle(
-                    fontSize: 15, color: Colors.white70, shadows: [Shadow(blurRadius: 6)]),
+                tr('اسحب لتوجيه المركبة • اضغط زر الليزر لتحطيم الصخور', 'Drag to steer • Hold the laser button to blast rocks'),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 15, color: Colors.white, shadows: [Shadow(blurRadius: 8)]),
               ),
             ),
         ],
@@ -983,22 +1440,15 @@ class _FireButton extends StatelessWidget {
         height: 84,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          gradient: const RadialGradient(
-            colors: [Color(0xFFFF8A65), Color(0xFFD84315)],
-          ),
+          gradient: const RadialGradient(colors: [Color(0xFF7FE8FF), Color(0xFF0B6C9E)]),
           border: Border.all(color: Colors.white70, width: 3),
-          boxShadow: const [BoxShadow(blurRadius: 16, color: Colors.deepOrange)],
+          boxShadow: const [BoxShadow(blurRadius: 16, color: Color(0xFF29B6F6))],
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const SizedBox(
-              width: 44,
-              height: 32,
-              child: CustomPaint(painter: PistolIconPainter()),
-            ),
-            Text(label,
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+            const Icon(Icons.flare, size: 36, color: Colors.white),
+            Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
           ],
         ),
       ),
@@ -1007,20 +1457,24 @@ class _FireButton extends StatelessWidget {
 }
 
 class _EndCard extends StatelessWidget {
+  final String? image;
   final IconData icon;
   final Color color;
   final String title;
   final List<String> lines;
+  final Widget? extra;
   final String primary;
   final VoidCallback onPrimary;
   final String secondary;
   final VoidCallback onSecondary;
 
   const _EndCard({
+    this.image,
     required this.icon,
     required this.color,
     required this.title,
     required this.lines,
+    this.extra,
     required this.primary,
     required this.onPrimary,
     required this.secondary,
@@ -1032,39 +1486,45 @@ class _EndCard extends StatelessWidget {
     return Container(
       color: Colors.black45,
       alignment: Alignment.center,
-      child: Container(
-        margin: const EdgeInsets.all(24),
-        padding: const EdgeInsets.all(22),
-        decoration: BoxDecoration(
-          color: const Color(0xFF0B1830).withOpacity(.95),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: color.withOpacity(.7), width: 2),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: color, size: 56),
-            const SizedBox(height: 10),
-            Text(title,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900)),
-            const SizedBox(height: 12),
-            for (final l in lines)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Text(l, style: const TextStyle(fontSize: 16)),
+      child: SingleChildScrollView(
+        child: Container(
+          margin: const EdgeInsets.all(22),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0B1830).withValues(alpha: .95),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: color.withValues(alpha: .7), width: 2),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (image != null)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Image.asset(image!, height: 150, width: double.infinity, fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+                )
+              else
+                Icon(icon, color: color, size: 56),
+              const SizedBox(height: 10),
+              Text(title, textAlign: TextAlign.center, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900)),
+              const SizedBox(height: 10),
+              for (final l in lines)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Text(l, style: const TextStyle(fontSize: 16)),
+                ),
+              if (extra != null) ...[const SizedBox(height: 6), extra!],
+              const SizedBox(height: 14),
+              FilledButton(
+                onPressed: onPrimary,
+                style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 14)),
+                child: Text(primary, style: const TextStyle(fontSize: 17)),
               ),
-            const SizedBox(height: 18),
-            FilledButton(
-              onPressed: onPrimary,
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 14),
-              ),
-              child: Text(primary, style: const TextStyle(fontSize: 17)),
-            ),
-            const SizedBox(height: 6),
-            TextButton(onPressed: onSecondary, child: Text(secondary)),
-          ],
+              const SizedBox(height: 6),
+              TextButton(onPressed: onSecondary, child: Text(secondary)),
+            ],
+          ),
         ),
       ),
     );
@@ -1072,92 +1532,141 @@ class _EndCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// الرسم
+// الرسم ثلاثي الأبعاد
 // ---------------------------------------------------------------------------
 
-class PistolIconPainter extends CustomPainter {
-  const PistolIconPainter();
+/// موارد الرسم الثابتة (الشبكات) — تُبنى مرة واحدة.
+class JourneyScene {
+  final UvSphere skySphere = UvSphere(40, 20);
+  final List<Mesh> asteroids = [for (int i = 0; i < 6; i++) buildAsteroid(i * 7 + 3), buildAsteroid(99, detail: 2)];
+  final Mesh core = buildSlsCore();
+  final Mesh srbL = buildBooster(-1);
+  final Mesh srbR = buildBooster(1);
+  final Mesh iss = buildIss();
+  final Mesh gps = buildSatellite();
+  final Mesh geo = buildSatellite(body: const Color(0xFFD8D8D8));
+  final Map<int, Mesh> _orion = {};
+  final TriBatch batch = TriBatch();
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    final s = size.width / 44;
-    canvas.save();
-    canvas.scale(s);
-    final metal = Paint()..color = const Color(0xFF263238);
-    final grip = Paint()..color = const Color(0xFF5D4037);
-    // الجسم والسبطانة
-    canvas.drawRRect(
-        RRect.fromLTRBR(4, 4, 42, 13, const Radius.circular(2)), metal);
-    // المقبض
-    final g = Path()
-      ..moveTo(8, 12)
-      ..lineTo(19, 12)
-      ..lineTo(16, 30)
-      ..lineTo(5, 30)
-      ..close();
-    canvas.drawPath(g, grip);
-    // واقي الزناد
-    canvas.drawArc(
-      const Rect.fromLTWH(17, 9, 10, 11),
-      0,
-      math.pi,
-      false,
-      Paint()
-        ..color = const Color(0xFF263238)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2,
-    );
-    canvas.drawCircle(const Offset(40, 8.5), 2, Paint()..color = Colors.amber);
-    canvas.restore();
+  Mesh orion(double deploy) => _orion.putIfAbsent((deploy * 20).round(), () => buildOrion(deploy: (deploy * 20).round() / 20));
+
+  /// اتجاه مركز المجرة على الخريطة (القوس/الرامي): u≈0.77 ، v≈0.66
+  late final M3 skyOrient = M3.align(
+    UvSphere.dirFromUv(.77, .66),
+    const V3(0, 1, 0),
+    const V3(.42, .2, 1).normalized,
+    const V3(.45, 1, 0),
+  );
+
+  /// موقع مركز كينيدي للفضاء (28.6° شمالاً، 80.6° غرباً) تحت المركبة عند الانطلاق.
+  static final V3 _ksc = UvSphere.dirFromLatLon(28.6, -80.6);
+
+  M3 earthOrient(JourneyWorld w, V3 earthDir) {
+    // الشمال المحلي نحو يسار مسار الرحلة (نحن نطير نحو الشرق)
+    final align = M3.align(_ksc, const V3(0, 1, 0), -earthDir, const V3(-1, 0, 0));
+    final spin = M3.rotY(-w.realSeconds * 2 * math.pi / 86164);
+    return M3.rotX(-w.groundAngle) * align * spin;
   }
 
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  M3 moonOrient(V3 moonDir) {
+    // الوجه القريب من القمر يواجه الأرض دائماً (ونحن قادمون من الأرض)
+    return M3.align(const V3(0, 0, -1), const V3(0, 1, 0), -moonDir, const V3(0, 1, 0));
+  }
 }
 
 class JourneyPainter extends CustomPainter {
   final JourneyWorld w;
-  JourneyPainter(this.w) : super(repaint: w);
+  final SpaceArt art;
+  final JourneyScene scene;
+  final double bottomPad;
+  JourneyPainter(this.w, this.art, this.scene, {this.bottomPad = 0}) : super(repaint: w);
 
-  double get km => w.km;
+  final Camera cam = Camera();
+  final Camera sky = Camera();
+
+  void _setupCamera(Size size) {
+    cam.setViewport(size, hfovDeg: 70);
+    final p = w.probePos;
+    // كاميرا جانبية خلفية أثناء صعود الصاروخ، ثم كاميرا مطاردة خلف أوريون
+    final chase = _smooth(0, 2.2, w.separationT);
+    final eyeA = p * .7 + const V3(6.5, 2.4, -10.5);
+    final tgtA = p * .9 + w.probeRot.apply(const V3(0, 0, -2.6)) + const V3(-.4, .3, 0);
+    final eyeB = V3(p.x * .55, p.y * .55 + 2.1, -8.2);
+    final tgtB = V3(p.x * .72, p.y * .72 + .95, 20);
+    var eye = V3.lerp(eyeA, eyeB, chase);
+    final tgt = V3.lerp(tgtA, tgtB, chase);
+    if (w.shake > 0) {
+      final m = w.shake * .18;
+      eye = eye + V3(math.sin(w.clock * 83) * m, math.cos(w.clock * 71) * m, 0);
+    }
+    cam.lookAt(eye, tgt, roll: w.bank * .45);
+    sky
+      ..rot = cam.rot
+      ..focal = cam.focal
+      ..cx = cam.cx
+      ..cy = cam.cy
+      ..pos = V3.zero;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
-    canvas.save();
-    if (w.shake > 0) {
-      final m = w.shake * 7;
-      canvas.translate(math.sin(w.clock * 83) * m, math.cos(w.clock * 71) * m);
+    canvas.drawRect(Offset.zero & size, Paint()..color = Colors.black);
+    if (!w.ready) return;
+    _setupCamera(size);
+    final st = skyFor(w);
+    final atm = w.atmosphere;
+
+    _drawSkybox(canvas, sky, 1 - atm * .97);
+    _drawAtmosphereSky(canvas, size, atm);
+    if (atm < .5) {
+      _drawPlanets(canvas, size);
+      _drawComet(canvas, size);
     }
-    final atm = _clamp01(1 - km / 100); // 1 على الأرض، 0 في الفضاء
-    _sky(canvas, size, atm);
-    final space = _clamp01(1 - atm * 1.3);
-    _milkyWay(canvas, size, space);
-    _stars(canvas, size, space);
-    _sun(canvas, size, atm);
-    _planets(canvas, size, space);
-    _moon(canvas, size, atm);
-    _earth(canvas, size);
-    _vanAllen(canvas, size);
-    _meteors(canvas);
-    _comet(canvas, size);
-    _satellites(canvas, size);
-    _iss(canvas, size);
-    _launchPad(canvas, size);
-    _clouds(canvas, size);
-    _particles(canvas, (p) => p.color != Colors.white);
-    for (final m in w.monsters) {
-      _monster(canvas, m);
+    _drawEarth(canvas, size, sky, st);
+    _drawMoon(canvas, sky, st);
+    _drawHaze(canvas, size, atm);
+    _drawPuffs(canvas);
+    _drawDust(canvas);
+    _drawObjects(canvas);
+    _drawEffects(canvas);
+    if (w.damageFlash > 0) {
+      canvas.drawRect(
+        Offset.zero & size,
+        Paint()
+          ..shader = RadialGradient(
+            colors: [Colors.transparent, Colors.red.withValues(alpha: .55 * w.damageFlash)],
+            stops: const [.55, 1],
+          ).createShader(Offset.zero & size),
+      );
     }
-    _enemyShots(canvas);
-    _shots(canvas);
-    if (w.phase != JourneyPhase.lost) _rocket(canvas);
-    _particles(canvas, (p) => p.color == Colors.white);
-    canvas.restore();
+    _drawRearView(canvas, size, st);
   }
 
-  void _sky(Canvas canvas, Size size, double atm) {
-    final top = Color.lerp(const Color(0xFF01020A), const Color(0xFF2F7FD8), atm)!;
-    final bottom = Color.lerp(const Color(0xFF040A18), const Color(0xFFA7D8FF), atm)!;
+  // --- السماء -------------------------------------------------------------
+
+  void _drawSkybox(Canvas canvas, Camera c, double opacity) {
+    if (opacity <= 0.01) return;
+    if (art.sky != null) {
+      drawSphere(canvas, c, scene.skySphere,
+          center: V3.zero,
+          radius: 500,
+          orient: scene.skyOrient,
+          inside: true,
+          style: SphereStyle(texture: art.sky, fallback: Colors.black, lit: false, opacity: opacity));
+    } else {
+      // نجوم احتياطية
+      final r = math.Random(3);
+      final paint = Paint()..color = Colors.white.withValues(alpha: opacity);
+      for (int i = 0; i < 300; i++) {
+        final d = V3(r.nextDouble() - .5, r.nextDouble() - .5, r.nextDouble() - .5).normalized;
+        final o = c.projectDir(d);
+        if (o != null) canvas.drawCircle(o, .5 + r.nextDouble(), paint);
+      }
+    }
+  }
+
+  void _drawAtmosphereSky(Canvas canvas, Size size, double atm) {
+    if (atm <= 0) return;
     final rect = Offset.zero & size;
     canvas.drawRect(
       rect,
@@ -1165,666 +1674,392 @@ class JourneyPainter extends CustomPainter {
         ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [top, bottom],
+          colors: [
+            Color.lerp(const Color(0xFF000814), const Color(0xFF1E64B4), atm)!.withValues(alpha: atm),
+            Color.lerp(const Color(0xFF02142E), const Color(0xFF8CC8F0), atm)!.withValues(alpha: atm),
+          ],
         ).createShader(rect),
     );
   }
 
-  void _milkyWay(Canvas canvas, Size size, double alpha) {
-    if (alpha <= 0) return;
-    final h = size.height;
-    final y = (h * .45 + w.scroll * .015) % (h * 1.8) - h * .4;
-    canvas.save();
-    canvas.translate(size.width * .5, y);
-    canvas.rotate(-.55);
-    final p = Paint()
-      ..color = _fade(const Color(0xFF8E7CC3), .16 * alpha)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 38);
-    canvas.drawOval(
-        Rect.fromCenter(center: Offset.zero, width: size.width * 2.4, height: 120), p);
-    p.color = _fade(const Color(0xFFE1D5FF), .1 * alpha);
-    canvas.drawOval(
-        Rect.fromCenter(center: Offset.zero, width: size.width * 1.8, height: 45), p);
-    canvas.restore();
-  }
-
-  void _stars(Canvas canvas, Size size, double alpha) {
-    if (alpha <= 0) return;
-    final paint = Paint();
-    final h = size.height + 10;
-    for (final s in w.stars) {
-      final y = (s.y * h + w.scroll * s.speed) % h - 5;
-      final tw = .65 + .35 * math.sin(w.clock * 2 + s.twinkle);
-      paint.color = _fade(s.color, alpha * tw);
-      canvas.drawCircle(Offset(s.x * size.width, y), s.r, paint);
-    }
-  }
-
-  void _sun(Canvas canvas, Size size, double atm) {
-    final c = Offset(size.width * .1, size.height * .13);
-    final glowR = 110.0 - atm * 30;
-    canvas.drawCircle(
-      c,
-      glowR,
-      Paint()
-        ..shader = RadialGradient(colors: [
-          _fade(const Color(0xFFFFF8E1), .9),
-          _fade(const Color(0xFFFFE082), .25),
-          _fade(const Color(0xFFFFE082), 0),
-        ], stops: const [0, .25, 1])
-            .createShader(Rect.fromCircle(center: c, radius: glowR)),
-    );
-    canvas.drawCircle(c, 15, Paint()..color = Colors.white);
-    _label(canvas, w.tr('الشمس', 'Sun'), c + const Offset(0, 22), .75 * (1 - atm));
-  }
-
-  void _planets(Canvas canvas, Size size, double alpha) {
-    if (alpha <= 0) return;
-    final show = _clamp01((km - 40000) / 30000);
-    final planets = [
-      (Offset(size.width * .2, size.height * .42), const Color(0xFFFFF3C4), 3.4,
-          w.tr('الزهرة', 'Venus')),
-      (Offset(size.width * .85, size.height * .55), const Color(0xFFFF7043), 2.6,
-          w.tr('المريخ', 'Mars')),
-      (Offset(size.width * .38, size.height * .24), const Color(0xFFFFE0B2), 3.0,
-          w.tr('المشتري', 'Jupiter')),
-    ];
-    for (final (pos, color, r, name) in planets) {
-      canvas.drawCircle(
-          pos,
-          r * 3,
-          Paint()
-            ..color = _fade(color, .25 * alpha)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5));
-      canvas.drawCircle(pos, r, Paint()..color = _fade(color, alpha));
-      _label(canvas, name, pos + Offset(0, r + 9), .7 * alpha * show);
-    }
-  }
-
-  void _label(Canvas canvas, String text, Offset center, double alpha) {
-    if (alpha <= .01) return;
+  void _label(Canvas canvas, Offset at, String text, Color color, {double size = 11}) {
     final tp = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: TextStyle(
-            color: _fade(Colors.white, alpha),
-            fontSize: 11,
-            fontWeight: FontWeight.w600),
-      ),
-      textDirection: TextDirection.ltr,
+      text: TextSpan(text: text, style: TextStyle(color: color, fontSize: size, shadows: const [Shadow(blurRadius: 4)])),
+      textDirection: w.arabic ? TextDirection.rtl : TextDirection.ltr,
     )..layout();
-    tp.paint(canvas, center - Offset(tp.width / 2, 0));
+    tp.paint(canvas, at - Offset(tp.width / 2, 0));
   }
 
-  // --- الأرض ---
-  void _earth(Canvas canvas, Size size) {
-    final wd = size.width, h = size.height;
-    final r = wd * 2.7 * kEarthRadiusKm / (kEarthRadiusKm + km);
-    final shrink = _clamp01(1 - r / (wd * 2.7));
-    final low = _clamp01(km / 80);
-    final mid = _clamp01((km - 150) / 2500);
-    final top = _lerp(_lerp(h * .86, h * 1.08, low), _lerp(h * .86, h * .9, shrink), mid);
-    final c = Offset(_lerp(wd * .5, wd * .2, shrink * shrink), top + r);
-    if (top > h + 5) return;
-
-    // الهالة الجوية
-    canvas.drawCircle(
-      c,
-      r * 1.04 + 4,
-      Paint()
-        ..color = _fade(const Color(0xFF64B5F6), .55)
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, (r * .06).clamp(3, 30)),
-    );
-    canvas.save();
-    canvas.clipPath(Path()..addOval(Rect.fromCircle(center: c, radius: r)));
-    final rect = Rect.fromCircle(center: c, radius: r);
-    canvas.drawCircle(
-      c,
-      r,
-      Paint()
-        ..shader = const RadialGradient(
-          center: Alignment(-.35, -.45),
-          radius: .9,
-          colors: [Color(0xFF5DB8FF), Color(0xFF1565C0), Color(0xFF0A2A5E)],
-        ).createShader(rect),
-    );
-    final rot = w.clock * .05;
-    _surfaceBlobs(canvas, c, r, w.continents, rot, const Color(0xFF4CAF50), .95,
-        brown: true);
-    _surfaceBlobs(canvas, c, r, w.earthClouds, rot * 1.4, Colors.white, .55);
-    // الجانب الليلي
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Colors.transparent, _fade(Colors.black, .65)],
-          stops: const [.45, 1],
-        ).createShader(rect),
-    );
-    canvas.restore();
-    if (r < wd * .5) {
-      _label(canvas, w.tr('الأرض', 'Earth'), c + Offset(0, -r - 18),
-          .8 * _clamp01((wd * .5 - r) / (wd * .2)));
+  void _drawPlanets(Canvas canvas, Size size) {
+    if (w.km < 55000 || w.phase == JourneyPhase.arrival || w.phase == JourneyPhase.won) return;
+    final fade = _smooth(55000, 70000, w.km);
+    final labels = _clamp01(1 - (w.km - 90000) / 40000);
+    final planets = [
+      (const V3(-.62, .32, 1), const Color(0xFFFFF4D6), 3.2, w.tr('الزهرة', 'Venus')),
+      (const V3(-.28, .52, 1), const Color(0xFFFF9E6B), 2.2, w.tr('المريخ', 'Mars')),
+      (const V3(.66, .5, 1), const Color(0xFFFFE6B8), 2.8, w.tr('المشتري', 'Jupiter')),
+    ];
+    for (final (d, c, r, name) in planets) {
+      final o = sky.projectDir(d.normalized);
+      if (o == null) continue;
+      canvas.drawCircle(o, r * 3, Paint()..color = c.withValues(alpha: .18 * fade)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
+      canvas.drawCircle(o, r, Paint()..color = c.withValues(alpha: fade));
+      if (labels > 0) _label(canvas, o + const Offset(0, 8), name, Colors.white.withValues(alpha: .8 * labels * fade));
     }
   }
 
-  void _surfaceBlobs(Canvas canvas, Offset c, double r, List<_Blob> blobs,
-      double rot, Color color, double alpha, {bool brown = false}) {
-    final paint = Paint();
-    for (int i = 0; i < blobs.length; i++) {
-      final b = blobs[i];
-      final lon = b.lon + rot;
-      final z = math.cos(lon) * math.cos(b.lat);
-      if (z <= 0) continue;
-      final x = c.dx + r * math.sin(lon) * math.cos(b.lat);
-      final y = c.dy - r * math.sin(b.lat);
-      final bw = r * b.size * b.stretch * math.cos(lon);
-      final bh = r * b.size;
-      paint.color = _fade(
-          brown && i % 3 == 0 ? const Color(0xFF8D6E63) : color, alpha * (.4 + z * .6));
-      canvas.drawOval(Rect.fromCenter(center: Offset(x, y), width: bw, height: bh), paint);
-    }
-  }
-
-  void _launchPad(Canvas canvas, Size size) {
-    if (km > 4) return;
-    final base = size.height * .9 + km * 90;
-    final x = size.width * .22;
-    final metal = Paint()
-      ..color = const Color(0xFF546E7A)
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke;
-    canvas.drawRect(Rect.fromLTWH(0, base, size.width, 400),
-        Paint()..color = const Color(0xFF6D8B4E));
-    canvas.drawRect(Rect.fromLTWH(x - 12, base - 170, 24, 170), metal);
-    for (double y = base - 170; y < base; y += 20) {
-      canvas.drawLine(Offset(x - 12, y), Offset(x + 12, y + 20), metal);
-    }
-    canvas.drawLine(Offset(x + 12, base - 120), Offset(x + 55, base - 120), metal);
-  }
-
-  void _clouds(Canvas canvas, Size size) {
-    if (km > 15) return;
-    final alpha = _clamp01(1 - km / 15);
-    final h = size.height;
-    final paint = Paint()
-      ..color = _fade(Colors.white, .85 * alpha)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
-    for (int i = 0; i < w.skyClouds.length; i++) {
-      final cl = w.skyClouds[i];
-      final y = (cl.dy * h * 1.4 + w.scroll * 1.8) % (h * 1.4) - h * .2;
-      final x = cl.dx * size.width;
-      final s = 30.0 + (i % 3) * 14;
-      canvas.drawCircle(Offset(x, y), s, paint);
-      canvas.drawCircle(Offset(x + s * .9, y + 6), s * .8, paint);
-      canvas.drawCircle(Offset(x - s * .9, y + 8), s * .7, paint);
-    }
-  }
-
-  // --- القمر ---
-  void _moon(Canvas canvas, Size size, double atm) {
-    final wd = size.width, h = size.height;
-    final d = kEarthMoonKm - km + kMoonRadiusKm;
-    final r = math.max(4.0, wd * 2.7 * kMoonRadiusKm / d);
-    final bottom = math.min(h * .16 + r, h * .44);
-    final grow = _clamp01(r / (wd * .5));
-    final c = Offset(_lerp(wd * .68, wd * .5, grow), bottom - r);
-    final rect = Rect.fromCircle(center: c, radius: r);
-
-    canvas.drawCircle(
-      c,
-      r * 1.25 + 6,
-      Paint()
-        ..color = _fade(Colors.white, .18 * (1 - atm * .5))
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, (r * .15).clamp(4, 40)),
-    );
-    canvas.save();
-    canvas.clipPath(Path()..addOval(rect));
-    canvas.drawCircle(
-      c,
-      r,
-      Paint()
-        ..shader = const RadialGradient(
-          center: Alignment(-.3, -.35),
-          colors: [Color(0xFFF2F2F0), Color(0xFFBDBDBD), Color(0xFF7A7A7A)],
-        ).createShader(rect),
-    );
-    final mare = Paint()..color = _fade(const Color(0xFF7D7F86), .55);
-    for (final m in w.maria) {
-      canvas.drawOval(
-          Rect.fromCenter(
-              center: c + Offset(m.lon * r, m.lat * r),
-              width: m.size * r * 2 * m.stretch,
-              height: m.size * r * 2),
-          mare);
-    }
-    if (r > 10) {
-      final rim = Paint()
-        ..color = _fade(Colors.white, .35)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = math.max(.6, r * .008);
-      final pit = Paint()..color = _fade(const Color(0xFF5E5E5E), .45);
-      for (final cr in w.craters) {
-        final cc = c + Offset(cr.lon * r, cr.lat * r);
-        final cs = cr.size * r;
-        canvas.drawCircle(cc, cs, pit);
-        canvas.drawCircle(cc - Offset(cs * .15, cs * .15), cs, rim);
-      }
-    }
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Colors.transparent, _fade(Colors.black, .55)],
-          stops: const [.55, 1],
-        ).createShader(rect),
-    );
-    canvas.restore();
-    if (r < wd * .35) {
-      _label(canvas, w.tr('القمر', 'Moon'), c + Offset(0, r + 6), .85);
-    }
-  }
-
-  // --- أحزمة فان ألن ---
-  void _vanAllen(Canvas canvas, Size size) {
-    if (km < 500 || km > 80000) return;
-    final a = math.sin(math.pi * _clamp01((km - 500) / 79500));
-    final wd = size.width;
-    final r = wd * 2.7 * kEarthRadiusKm / (kEarthRadiusKm + km);
-    final shrink = _clamp01(1 - r / (wd * 2.7));
-    final mid = _clamp01((km - 150) / 2500);
-    final top = _lerp(size.height * 1.08, _lerp(size.height * .86, size.height * .9, shrink), mid);
-    final c = Offset(_lerp(wd * .5, wd * .2, shrink * shrink), top + r);
-    final pulse = .8 + .2 * math.sin(w.clock * 2);
-    final inner = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = r * .6
-      ..color = _fade(const Color(0xFF26C6DA), .22 * a * pulse)
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, (r * .2).clamp(6, 50));
-    canvas.drawCircle(c, r * 1.55, inner);
-    final outer = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = r * 3
-      ..color = _fade(const Color(0xFFEC407A), .16 * a * pulse)
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, (r * .5).clamp(10, 60));
-    canvas.drawCircle(c, r * 5.5, outer);
-  }
-
-  // --- محطة الفضاء الدولية ---
-  void _iss(Canvas canvas, Size size) {
-    const start = 200.0, end = 700.0;
-    if (km < start || km > end) return;
-    final t = (km - start) / (end - start);
-    final pos = Offset(_lerp(-60, size.width + 60, t), _lerp(size.height * .3, size.height * .55, t));
-    canvas.save();
-    canvas.translate(pos.dx, pos.dy);
-    canvas.rotate(-.15);
-    final panel = Paint()..color = const Color(0xFF3F51B5);
-    final truss = Paint()..color = const Color(0xFFB0BEC5);
-    canvas.drawRect(const Rect.fromLTWH(-48, -2, 96, 4), truss);
-    for (final x in [-46.0, -30.0, 18.0, 34.0]) {
-      canvas.drawRect(Rect.fromLTWH(x, -22, 12, 18), panel);
-      canvas.drawRect(Rect.fromLTWH(x, 4, 12, 18), panel);
-    }
-    canvas.drawRRect(
-        RRect.fromRectAndRadius(const Rect.fromLTWH(-8, -9, 16, 18), const Radius.circular(3)),
-        Paint()..color = const Color(0xFFECEFF1));
-    canvas.restore();
-    _label(canvas, w.tr('محطة الفضاء الدولية', 'ISS'), pos + const Offset(0, 26), .9);
-  }
-
-  // --- الأقمار الصناعية ---
-  void _satellites(Canvas canvas, Size size) {
-    void sat(double start, double end, double y0, double y1, bool ltr, String name) {
-      if (km < start || km > end) return;
-      final t = (km - start) / (end - start);
-      final x = ltr ? _lerp(-30, size.width + 30, t) : _lerp(size.width + 30, -30, t);
-      final pos = Offset(x, _lerp(size.height * y0, size.height * y1, t));
-      canvas.save();
-      canvas.translate(pos.dx, pos.dy);
-      canvas.rotate(w.clock * .6);
-      canvas.drawRect(const Rect.fromLTWH(-24, -4, 16, 8), Paint()..color = const Color(0xFF1E88E5));
-      canvas.drawRect(const Rect.fromLTWH(8, -4, 16, 8), Paint()..color = const Color(0xFF1E88E5));
-      canvas.drawRect(const Rect.fromLTWH(-7, -7, 14, 14), Paint()..color = const Color(0xFFFFC107));
-      canvas.restore();
-      _label(canvas, name, pos + const Offset(0, 14), .8);
-    }
-
-    sat(14000, 26000, .25, .6, true, 'GPS');
-    sat(16000, 24000, .5, .35, false, 'GPS');
-    sat(29000, 42000, .3, .5, false, w.tr('قمر اتصالات', 'Comms sat'));
-    sat(31000, 41000, .6, .45, true, w.tr('قمر طقس', 'Weather sat'));
-  }
-
-  // --- المذنب ---
-  void _comet(Canvas canvas, Size size) {
-    const start = 95000.0, end = 165000.0;
-    if (km < start || km > end) return;
-    final t = (km - start) / (end - start);
-    final head = Offset(_lerp(size.width * 1.1, -size.width * .1, t),
-        _lerp(size.height * .08, size.height * .5, t));
-    final sun = Offset(size.width * .1, size.height * .13);
-    var dir = head - sun;
-    dir = dir / dir.distance;
-    final tail = head + dir * 170;
-    final perp = Offset(-dir.dy, dir.dx) * 22;
+  void _drawComet(Canvas canvas, Size size) {
+    if (w.km < 100000 || w.km > 200000) return;
+    final fade = _smooth(100000, 110000, w.km) * (1 - _smooth(185000, 200000, w.km));
+    final head = const V3(-.7, .55, 1).normalized;
+    final o = sky.projectDir(head);
+    final t = sky.projectDir((head - kSunDir * .12).normalized);
+    if (o == null || t == null) return;
+    final tail = t - o;
+    final dir = tail / tail.distance;
+    final len = math.min(size.width * .45, tail.distance * 4);
+    final end = o + dir * len;
+    final normal = Offset(-dir.dy, dir.dx);
     final path = Path()
-      ..moveTo(head.dx + perp.dx * .2, head.dy + perp.dy * .2)
-      ..lineTo(tail.dx + perp.dx, tail.dy + perp.dy)
-      ..lineTo(tail.dx - perp.dx, tail.dy - perp.dy)
-      ..lineTo(head.dx - perp.dx * .2, head.dy - perp.dy * .2)
+      ..moveTo(o.dx + normal.dx * 2, o.dy + normal.dy * 2)
+      ..lineTo(end.dx + normal.dx * len * .16, end.dy + normal.dy * len * .16)
+      ..lineTo(end.dx - normal.dx * len * .1, end.dy - normal.dy * len * .1)
+      ..lineTo(o.dx - normal.dx * 2, o.dy - normal.dy * 2)
       ..close();
     canvas.drawPath(
       path,
       Paint()
         ..shader = LinearGradient(colors: [
-          _fade(const Color(0xFFB3E5FC), .7),
-          _fade(const Color(0xFFB3E5FC), 0),
-        ]).createShader(Rect.fromPoints(head, tail))
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+          const Color(0xFFCDEBFF).withValues(alpha: .75 * fade),
+          const Color(0xFF7FB2FF).withValues(alpha: 0),
+        ]).createShader(Rect.fromPoints(o, end))
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
     );
-    canvas.drawCircle(
-        head,
-        9,
-        Paint()
-          ..color = _fade(Colors.white, .7)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
-    canvas.drawCircle(head, 3.5, Paint()..color = Colors.white);
-    _label(canvas, w.tr('مذنّب', 'Comet'), head + const Offset(0, 12), .8);
+    canvas.drawCircle(o, 6, Paint()..color = const Color(0xFFE8F6FF).withValues(alpha: .5 * fade)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
+    canvas.drawCircle(o, 2.4, Paint()..color = Colors.white.withValues(alpha: fade));
+    _label(canvas, o + const Offset(0, 10), w.tr('مذنّب', 'Comet'), Colors.white.withValues(alpha: .8 * fade));
   }
 
-  void _meteors(Canvas canvas) {
-    for (final m in w.meteors) {
-      final p = Offset(m.x, m.y);
-      final tail = p - Offset(m.vx, m.vy) * .12;
-      canvas.drawLine(
-        p,
-        tail,
-        Paint()
-          ..shader = LinearGradient(colors: [Colors.white, _fade(Colors.white, 0)])
-              .createShader(Rect.fromPoints(p, tail))
-          ..strokeWidth = 2
-          ..strokeCap = StrokeCap.round,
-      );
+  // --- الأرض والقمر ----------------------------------------------------------
+
+  bool _inView(Camera c, V3 dir, double alpha) {
+    final cd = c.rot.apply(dir);
+    final angle = math.acos(cd.z.clamp(-1.0, 1.0));
+    return angle - alpha < 1.2;
+  }
+
+  void _drawEarth(Canvas canvas, Size size, Camera c, SkyState st, {bool rear = false}) {
+    if (!_inView(c, st.earthDir, st.earthAlpha)) return;
+    const d = 1000.0;
+    final r = d * math.sin(st.earthAlpha);
+    final center = st.earthDir * d;
+    final orient = scene.earthOrient(w, st.earthDir);
+    final rings = rear ? 10 : (st.earthAlpha > .6 ? 34 : 24), segs = rear ? 40 : 72;
+    final small = c.focal * math.tan(st.earthAlpha) < 70;
+    // هالة الغلاف الجوي الأزرق حول حافة الأرض
+    for (final (k, op) in [(1.035, .14), (1.014, .3)]) {
+      drawCap(canvas, c,
+          center: center,
+          radius: r * k,
+          orient: orient,
+          light: kSunDir,
+          rings: 3,
+          segs: segs,
+          style: SphereStyle(fallback: const Color(0xFF5FA8FF), blend: BlendMode.plus, opacity: op, ambient: 0));
+    }
+    drawCap(canvas, c,
+        center: center,
+        radius: r,
+        orient: orient,
+        light: kSunDir,
+        rings: rings,
+        segs: segs,
+        style: SphereStyle(texture: small ? art.earthSmall : art.earth, fallback: const Color(0xFF2F6DB5), ambient: .035, gain: 1.7));
+    if (art.clouds != null) {
+      drawCap(canvas, c,
+          center: center,
+          radius: r * (1 + 4 / kEarthRadiusKm),
+          orient: orient * M3.rotY(w.clock * .004),
+          light: kSunDir,
+          rings: rings,
+          segs: segs,
+          style: SphereStyle(
+              texture: small ? art.cloudsSmall : art.clouds, fallback: Colors.white, blend: BlendMode.screen, ambient: 0, opacity: .95, gain: 1.5));
+    }
+    // تشتت الضوء في الغلاف الجوي يعطي الأرض لونها الأزرق المضيء
+    drawCap(canvas, c,
+        center: center,
+        radius: r * (1 + 6 / kEarthRadiusKm),
+        orient: orient,
+        light: kSunDir,
+        rings: rings,
+        segs: segs,
+        style: SphereStyle(fallback: const Color(0xFF8CC0F5), opacity: .22, ambient: 0, gain: 1.3));
+  }
+
+  void _drawMoon(Canvas canvas, Camera c, SkyState st) {
+    if (!_inView(c, st.moonDir, st.moonAlpha)) return;
+    const d = 1000.0;
+    final r = d * math.sin(st.moonAlpha);
+    final center = st.moonDir * d;
+    if (st.moonAlpha < .006) {
+      // بعيد جداً: نقطة لامعة
+      final o = c.projectDir(st.moonDir);
+      if (o != null) canvas.drawCircle(o, 2.5, Paint()..color = const Color(0xFFE8E4DA));
+    } else {
+      drawCap(canvas, c,
+          center: center,
+          radius: r,
+          rings: st.moonAlpha > .05 ? (st.moonAlpha > .6 ? 34 : 24) : 10,
+          segs: st.moonAlpha > .05 ? 72 : 36,
+          orient: scene.moonOrient(st.moonDir),
+          light: kSunDir,
+          style: SphereStyle(
+              texture: c.focal * math.tan(st.moonAlpha) < 70 ? art.moonSmall : art.moon,
+              fallback: const Color(0xFFB8B4AC),
+              ambient: .02,
+              gain: 1.25));
+    }
+    if (w.phase == JourneyPhase.flying && st.moonAlpha < .08) {
+      final o = c.projectDir(st.moonDir);
+      if (o != null) {
+        final rr = c.focal * math.tan(st.moonAlpha);
+        _label(canvas, o + Offset(0, rr + 6), '${w.tr('القمر', 'Moon')} • ${formatInt(st.moonDistKm)} ${w.tr('كم', 'km')}',
+            Colors.white70);
+      }
     }
   }
 
-  // --- الصاروخ مع رائد الفضاء والمسدس ---
-  void _rocket(Canvas canvas) {
-    if (w.invulnerable > 0 && (w.clock * 12).floor() % 2 == 0) return;
-    canvas.save();
-    canvas.translate(w.rocketPx, w.rocketPy);
-    canvas.scale(w.rocketScale);
-
-    final flying = w.phase != JourneyPhase.countdown || w.countdown < 1.2;
-    if (flying) {
-      final len = 30 + math.sin(w.clock * 40) * 6 + w.rnd.nextDouble() * 6;
-      final flame = Path()
-        ..moveTo(-10, 30)
-        ..quadraticBezierTo(0, 30 + len * 1.4, 10, 30)
-        ..close();
-      canvas.drawPath(
-          flame,
-          Paint()
-            ..color = _fade(const Color(0xFFFF6D00), .6)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
-      canvas.drawPath(
-        flame,
-        Paint()
-          ..shader = const LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFFFFFDE7), Color(0xFFFFC107), Color(0x00FF5722)],
-          ).createShader(Rect.fromLTWH(-10, 30, 20, len)),
-      );
-    }
-
-    final red = Paint()..color = const Color(0xFFE53935);
-    // الزعانف
-    canvas.drawPath(
-        Path()
-          ..moveTo(-13, 8)
-          ..lineTo(-26, 30)
-          ..lineTo(-13, 26)
-          ..close(),
-        red);
-    canvas.drawPath(
-        Path()
-          ..moveTo(13, 8)
-          ..lineTo(26, 30)
-          ..lineTo(13, 26)
-          ..close(),
-        red);
-    // الجسم
-    const body = Rect.fromLTWH(-13, -30, 26, 60);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(body, const Radius.circular(6)),
+  void _drawHaze(Canvas canvas, Size size, double atm) {
+    if (atm <= 0.02 || w.km > 300) return;
+    final dip = math.acos(kEarthRadiusKm / (kEarthRadiusKm + w.km));
+    final h = sky.projectDir(V3(0, -math.sin(dip), math.cos(dip)));
+    if (h == null) return;
+    final band = size.height * .22;
+    final rect = Rect.fromLTRB(0, h.dy - band, size.width, h.dy + band * .5);
+    canvas.drawRect(
+      rect,
       Paint()
-        ..shader = const LinearGradient(
-          colors: [Color(0xFFB0BEC5), Colors.white, Color(0xFF90A4AE)],
-        ).createShader(body),
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            const Color(0xFFBFE3FF).withValues(alpha: 0),
+            const Color(0xFFD9EEFF).withValues(alpha: .7 * atm),
+            const Color(0xFFBFE3FF).withValues(alpha: 0),
+          ],
+        ).createShader(rect),
     );
-    canvas.drawRect(const Rect.fromLTWH(-13, 18, 26, 5), red);
-    // المقدمة
-    canvas.drawPath(
-        Path()
-          ..moveTo(-13, -29)
-          ..quadraticBezierTo(-10, -50, 0, -60)
-          ..quadraticBezierTo(10, -50, 13, -29)
-          ..close(),
-        red);
-    // النافذة ورائد الفضاء
-    canvas.drawCircle(const Offset(0, -10), 9.5, Paint()..color = const Color(0xFF90A4AE));
-    canvas.drawCircle(const Offset(0, -10), 8, Paint()..color = const Color(0xFF0D47A1));
-    canvas.drawCircle(const Offset(0, -10), 5.5, Paint()..color = Colors.white);
-    canvas.drawOval(Rect.fromCenter(center: const Offset(0, -10), width: 7, height: 4.5),
-        Paint()..color = const Color(0xFF263238));
-    canvas.drawCircle(const Offset(-1.5, -11), 1, Paint()..color = Colors.white70);
-    // ذراع رائد الفضاء يمسك المسدس
-    canvas.drawLine(
-        const Offset(6, -8),
-        const Offset(19, -24),
-        Paint()
-          ..color = Colors.white
-          ..strokeWidth = 4
-          ..strokeCap = StrokeCap.round);
-    // المسدس
-    final gun = Paint()..color = const Color(0xFF263238);
-    canvas.drawRRect(
-        RRect.fromLTRBR(15, -52, 23, -22, const Radius.circular(2)), gun);
-    canvas.drawPath(
-        Path()
-          ..moveTo(15, -30)
-          ..lineTo(26, -26)
-          ..lineTo(26, -18)
-          ..lineTo(15, -22)
-          ..close(),
-        Paint()..color = const Color(0xFF5D4037));
-    if (w.muzzle > 0) {
+  }
+
+  void _drawPuffs(Canvas canvas) {
+    for (final p in w.puffs) {
+      final o = cam.project(p.pos);
+      if (o == null) continue;
+      final z = cam.depth(p.pos);
+      final r = cam.focal * p.size / z;
+      if (r < 2 || r > w.size.width * .9) continue;
+      final a = _clamp01((z - 3) / 22) * _clamp01((120 - z) / 40) * .55;
       canvas.drawCircle(
-          const Offset(19, -55),
-          7 * w.muzzle,
-          Paint()
-            ..color = _fade(const Color(0xFFFFEB3B), w.muzzle)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+        o,
+        r,
+        Paint()
+          ..shader = RadialGradient(
+            colors: [Colors.white.withValues(alpha: a), Colors.white.withValues(alpha: a * .5), Colors.white.withValues(alpha: 0)],
+            stops: const [0, .45, 1],
+          ).createShader(Rect.fromCircle(center: o, radius: r)),
+      );
     }
-    canvas.restore();
   }
 
-  void _shots(Canvas canvas) {
-    final glow = Paint()
-      ..color = _fade(const Color(0xFFFFEB3B), .6)
-      ..strokeWidth = 7
+  void _drawDust(Canvas canvas) {
+    if (w.km < 90) return;
+    final v = w.approachSpeed;
+    if (v <= 0) return;
+    final paint = Paint()
       ..strokeCap = StrokeCap.round
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
-    final core = Paint()
-      ..color = Colors.white
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round;
-    for (final s in w.shots) {
-      final a = Offset(s.x, s.y), b = Offset(s.x, s.y + 16);
-      canvas.drawLine(a, b, glow);
-      canvas.drawLine(a, b, core);
+      ..color = Colors.white.withValues(alpha: .55 * _smooth(90, 200, w.km));
+    for (final d in w.dust) {
+      final a = cam.project(d);
+      final b = cam.project(d + V3(0, 0, v * .045));
+      if (a == null || b == null) continue;
+      final z = cam.depth(d);
+      paint.strokeWidth = (cam.focal * .05 / z).clamp(.6, 2.5);
+      canvas.drawLine(a, b, paint);
     }
   }
 
-  void _enemyShots(Canvas canvas) {
-    final glow = Paint()
-      ..color = _fade(const Color(0xFFFF4081), .7)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
-    final core = Paint()..color = const Color(0xFFFFCDD2);
-    for (final s in w.enemyShots) {
-      canvas.drawCircle(Offset(s.x, s.y), 7, glow);
-      canvas.drawCircle(Offset(s.x, s.y), 3.5, core);
+  // --- الأجسام ثلاثية الأبعاد -------------------------------------------------
+
+  void _drawObjects(Canvas canvas) {
+    final b = scene.batch..clear();
+    final light = kSunDir;
+    for (final s in w.scenery) {
+      final mesh = switch (s.kind) {
+        'iss' => scene.iss,
+        'gps' => scene.gps,
+        'geo' => scene.geo,
+        'srbL' => scene.srbL,
+        'srbR' => scene.srbR,
+        _ => scene.core,
+      };
+      final rot = M3.axisAngle(s.axis, s.angle);
+      b.add(cam, mesh, at: s.pos, rot: rot, light: light, ambient: .25);
     }
+    for (final r in w.rocks) {
+      if (r.kind == 3) continue;
+      final dist = r.pos.z;
+      final fade = _clamp01((160 - dist) / 30);
+      b.add(cam, scene.asteroids[r.mesh], at: r.pos, rot: r.rot, scale: r.radius, light: light, ambient: .1, opacity: fade, flash: r.hitFlash * .7);
+    }
+    final blink = w.invulnerable > 0 && (w.clock * 12).floor().isOdd;
+    if (w.phase != JourneyPhase.lost && !blink) {
+      final probeRot = w.probeRot;
+      final p = w.probePos;
+      b.add(cam, scene.orion(w.deploy), at: p, rot: probeRot, light: light, ambient: .3);
+      if (w.coreAttached) b.add(cam, scene.core, at: p, rot: probeRot, light: light, ambient: .3);
+      if (w.srbAttached) {
+        b.add(cam, scene.srbL, at: p, rot: probeRot, light: light, ambient: .3);
+        b.add(cam, scene.srbR, at: p, rot: probeRot, light: light, ambient: .3);
+      }
+    }
+    b.draw(canvas);
   }
 
-  void _particles(Canvas canvas, bool Function(_Particle) include) {
-    final paint = Paint();
-    for (final p in w.particles) {
-      if (!include(p)) continue;
-      final t = p.life / p.maxLife;
-      paint.color = _fade(p.color, t);
-      canvas.drawCircle(Offset(p.x, p.y), p.size * (.5 + t * .5), paint);
-    }
+  void _glow(Canvas canvas, Offset o, double r, Color c, double alpha) {
+    if (r <= .5 || alpha <= 0) return;
+    canvas.drawCircle(
+      o,
+      r,
+      Paint()
+        ..blendMode = BlendMode.plus
+        ..shader = RadialGradient(colors: [
+          c.withValues(alpha: alpha),
+          c.withValues(alpha: alpha * .35),
+          c.withValues(alpha: 0),
+        ], stops: const [0, .35, 1])
+            .createShader(Rect.fromCircle(center: o, radius: r)),
+    );
   }
 
-  // --- الوحوش ---
-  void _monster(Canvas canvas, _Monster m) {
-    canvas.save();
-    canvas.translate(m.x, m.y);
-    final r = m.radius;
-    final base = _monsterColor(m.kind);
-    final color = Color.lerp(base, Colors.white, m.hitFlash * .7)!;
-    final body = Paint()..color = color;
-    final dark = Paint()..color = Color.lerp(base, Colors.black, .45)!;
-    final wob = math.sin(m.age * 6 + m.phase);
-
-    switch (m.kind) {
-      case 0: // فقاعة خضراء بعين واحدة
-        final path = Path()..moveTo(-r, 0);
-        path.arcTo(Rect.fromCircle(center: Offset.zero, radius: r), math.pi, math.pi, false);
-        for (int i = 0; i < 4; i++) {
-          final x0 = r - i * r / 2;
-          path.quadraticBezierTo(x0 - r / 4, r * (.9 + .25 * (i.isEven ? wob : -wob)),
-              x0 - r / 2, r * .6);
-        }
-        path.close();
-        canvas.drawPath(path, body);
-        _eye(canvas, Offset(0, -r * .15), r * .38);
-        break;
-      case 1: // أخطبوط بنفسجي
-        final tp = Paint()
-          ..color = color
-          ..strokeWidth = r * .22
-          ..strokeCap = StrokeCap.round
-          ..style = PaintingStyle.stroke;
-        for (int i = 0; i < 4; i++) {
-          final x = -r * .6 + i * r * .4;
-          final sway = math.sin(m.age * 5 + i + m.phase) * r * .3;
-          final p = Path()
-            ..moveTo(x, r * .2)
-            ..quadraticBezierTo(x + sway, r * .8, x - sway * .5, r * 1.3);
-          canvas.drawPath(p, tp);
-        }
-        canvas.drawOval(
-            Rect.fromCenter(center: Offset(0, -r * .1), width: r * 2, height: r * 1.6), body);
-        _eye(canvas, Offset(-r * .35, -r * .2), r * .25);
-        _eye(canvas, Offset(r * .35, -r * .2), r * .25);
-        break;
-      case 2: // شوكي أحمر يطلق النار
-        final spikes = Path();
-        const n = 10;
-        for (int i = 0; i <= n * 2; i++) {
-          final a = i * math.pi / n + m.age;
-          final rr = i.isEven ? r * 1.25 : r * .85;
-          final p = Offset(math.cos(a) * rr, math.sin(a) * rr);
-          if (i == 0) {
-            spikes.moveTo(p.dx, p.dy);
-          } else {
-            spikes.lineTo(p.dx, p.dy);
+  void _drawEffects(Canvas canvas) {
+    // نار المحركات
+    if (w.phase != JourneyPhase.lost && w.phase != JourneyPhase.countdown) {
+      final p = w.probePos;
+      final rot = w.probeRot;
+      if (w.coreAttached) {
+        final nozzle = p + rot.apply(const V3(0, 0, -8.1));
+        final o = cam.project(nozzle);
+        if (o != null) {
+          final z = cam.depth(nozzle);
+          final s = cam.focal / z;
+          final flick = .85 + math.sin(w.clock * 47) * .1;
+          final vac = _smooth(30, 120, w.km); // العادم يتمدد في الفراغ
+          _glow(canvas, o, s * (1.2 + vac) * flick, const Color(0xFFFFF1C8), .85);
+          _glow(canvas, o, s * (2.6 + vac * 2) * flick, const Color(0xFFFF9A3C), .5 - vac * .2);
+          if (w.srbAttached) {
+            for (final sx in [-1.0, 1.0]) {
+              final q = cam.project(p + rot.apply(V3(sx, 0, -8.2)));
+              if (q != null) _glow(canvas, q, s * 1.8 * flick, const Color(0xFFFFF0C8), .9);
+            }
           }
         }
-        spikes.close();
-        canvas.drawPath(spikes, dark);
-        canvas.drawCircle(Offset.zero, r * .9, body);
-        _eye(canvas, Offset(-r * .35, -r * .15), r * .22, angry: true);
-        _eye(canvas, Offset(r * .35, -r * .15), r * .22, angry: true);
-        canvas.drawArc(Rect.fromCenter(center: Offset(0, r * .45), width: r * .8, height: r * .4),
-            math.pi, math.pi, false, Paint()..color = Colors.black87);
-        break;
-      case 3: // الوحش العملاق
-        canvas.drawCircle(
-            Offset.zero,
-            r * 1.3,
-            Paint()
-              ..color = _fade(const Color(0xFFB388FF), .35)
-              ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18));
-        final horn = Paint()..color = const Color(0xFFFFE0B2);
-        for (final s in [-1.0, 1.0]) {
-          canvas.drawPath(
-              Path()
-                ..moveTo(s * r * .45, -r * .7)
-                ..quadraticBezierTo(s * r * 1.1, -r * 1.2, s * r * .95, -r * 1.55)
-                ..quadraticBezierTo(s * r * .8, -r * 1.05, s * r * .15, -r * .85)
-                ..close(),
-              horn);
+      } else {
+        final at = p + rot.apply(const V3(0, 0, -1.25));
+        final o = cam.project(at);
+        if (o != null) {
+          final s = cam.focal / cam.depth(at);
+          final burn = w.engineBurn;
+          _glow(canvas, o, s * (.2 + burn * 1.1), const Color(0xFFBFD8FF), .2 + burn * .6);
         }
-        final arm = Paint()
-          ..color = color
-          ..strokeWidth = r * .25
-          ..strokeCap = StrokeCap.round
-          ..style = PaintingStyle.stroke;
-        for (final s in [-1.0, 1.0]) {
-          canvas.drawPath(
-              Path()
-                ..moveTo(s * r * .8, r * .1)
-                ..quadraticBezierTo(s * r * 1.5, r * (.3 + .3 * wob), s * r * 1.3, r * 1.0),
-              arm);
-        }
-        canvas.drawOval(
-            Rect.fromCenter(center: Offset.zero, width: r * 2.1, height: r * 1.9), body);
-        _eye(canvas, Offset(-r * .45, -r * .25), r * .22, angry: true);
-        _eye(canvas, Offset(r * .45, -r * .25), r * .22, angry: true);
-        _eye(canvas, Offset(0, -r * .5), r * .28, angry: true);
-        final mouth = Path()..moveTo(-r * .55, r * .25);
-        for (int i = 0; i < 6; i++) {
-          mouth.lineTo(-r * .55 + (i + .5) * r * .183, r * (i.isEven ? .5 : .3));
-        }
-        mouth
-          ..lineTo(r * .55, r * .25)
-          ..quadraticBezierTo(0, r * .85, -r * .55, r * .25);
-        canvas.drawPath(mouth, Paint()..color = const Color(0xFF1A0033));
-        break;
+      }
     }
-    if (m.kind == 2 && m.hp < m.maxHp) {
-      final bw = r * 1.6;
-      canvas.drawRect(Rect.fromLTWH(-bw / 2, -r * 1.55, bw, 4), Paint()..color = Colors.black54);
-      canvas.drawRect(Rect.fromLTWH(-bw / 2, -r * 1.55, bw * m.hp / m.maxHp, 4),
-          Paint()..color = Colors.greenAccent);
+    // الشهب المتوهجة
+    for (final r in w.rocks) {
+      if (r.kind != 3) continue;
+      final o = cam.project(r.pos);
+      if (o == null) continue;
+      final s = cam.focal / cam.depth(r.pos);
+      final tailEnd = cam.project(r.pos - r.vel * .06);
+      if (tailEnd != null) {
+        canvas.drawLine(
+          o,
+          tailEnd,
+          Paint()
+            ..strokeWidth = math.max(1.5, s * .5)
+            ..strokeCap = StrokeCap.round
+            ..shader = LinearGradient(colors: [const Color(0xFFFFF0C0), const Color(0x00FF7A2A)]).createShader(Rect.fromPoints(o, tailEnd)),
+        );
+      }
+      _glow(canvas, o, s * 1.6, const Color(0xFFFFC46B), .9);
     }
-    canvas.restore();
+    // أشعة الليزر
+    final core = Paint()
+      ..color = const Color(0xFFE6FDFF)
+      ..strokeCap = StrokeCap.round;
+    final halo = Paint()
+      ..color = const Color(0xFF29D3FF).withValues(alpha: .45)
+      ..strokeCap = StrokeCap.round
+      ..blendMode = BlendMode.plus;
+    for (final s in w.lasers) {
+      final a = cam.project(s.pos);
+      final b = cam.project(s.pos - s.vel * .03);
+      if (a == null || b == null) continue;
+      final k = cam.focal / cam.depth(s.pos);
+      halo.strokeWidth = math.max(2, k * .35);
+      core.strokeWidth = math.max(1, k * .12);
+      canvas.drawLine(a, b, halo);
+      canvas.drawLine(a, b, core);
+    }
+    // الجسيمات
+    final pp = Paint();
+    for (final p in w.particles) {
+      final o = cam.project(p.pos);
+      if (o == null) continue;
+      final z = cam.depth(p.pos);
+      final r = cam.focal * p.size / z;
+      final a = _clamp01(p.life / p.maxLife);
+      if (p.glow) {
+        _glow(canvas, o, r * 2, p.color, a);
+      } else {
+        pp
+          ..blendMode = BlendMode.srcOver
+          ..color = p.color.withValues(alpha: a * .6);
+        canvas.drawCircle(o, r, pp);
+      }
+    }
   }
 
-  void _eye(Canvas canvas, Offset c, double r, {bool angry = false}) {
-    canvas.drawCircle(c, r, Paint()..color = Colors.white);
-    canvas.drawCircle(c + Offset(0, r * .2), r * .5, Paint()..color = Colors.black);
-    canvas.drawCircle(c + Offset(-r * .15, 0), r * .15, Paint()..color = Colors.white);
-    if (angry) {
-      canvas.drawLine(
-          c + Offset(-r * 1.1, -r * 1.2),
-          c + Offset(r * 1.1, -r * .7),
-          Paint()
-            ..color = Colors.black
-            ..strokeWidth = r * .35
-            ..strokeCap = StrokeCap.round);
-    }
+  // --- الكاميرا الخلفية ------------------------------------------------------
+
+  void _drawRearView(Canvas canvas, Size size, SkyState st) {
+    if (w.phase != JourneyPhase.flying || w.km < 3000) return;
+    const side = 118.0;
+    final rect = Rect.fromLTWH(12, size.height - side - 30 - bottomPad, side, side);
+    final rr = RRect.fromRectAndRadius(rect, const Radius.circular(14));
+    canvas.save();
+    canvas.clipRRect(rr);
+    canvas.drawRect(rect, Paint()..color = Colors.black);
+    final rc = Camera();
+    rc.setViewport(rect.size, hfovDeg: (st.earthAlpha * 180 / math.pi * 6).clamp(3.0, 40.0));
+    rc.cx += rect.left;
+    rc.cy += rect.top;
+    rc.lookAt(V3.zero, st.earthDir);
+    _drawSkybox(canvas, rc, 1);
+    _drawEarth(canvas, size, rc, st, rear: true);
+    canvas.restore();
+    canvas.drawRRect(
+      rr,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..color = Colors.lightBlueAccent.withValues(alpha: .6),
+    );
+    _label(canvas, Offset(rect.center.dx, rect.top - 30), w.tr('الكاميرا الخلفية: الأرض', 'Rear camera: Earth'), Colors.white70, size: 10);
+    _label(canvas, Offset(rect.center.dx, rect.top - 16), '${formatInt(st.earthDistKm - kEarthRadiusKm)} ${w.tr('كم', 'km')}',
+        Colors.lightBlueAccent, size: 10);
   }
 
   @override
-  bool shouldRepaint(covariant JourneyPainter oldDelegate) => oldDelegate.w != w;
+  bool shouldRepaint(covariant JourneyPainter old) => old.w != w || old.art != art;
 }

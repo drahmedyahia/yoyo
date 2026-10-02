@@ -18,5 +18,9 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- العرض ثلاثي الأبعاد مختبر على محرك Skia؛ نستخدمه بدل Impeller -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
     </application>
 </manifest>

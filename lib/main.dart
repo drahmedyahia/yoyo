@@ -80,6 +80,17 @@ class HomePage extends StatelessWidget {
         fit: StackFit.expand,
         children: [
           const SpaceBackground(),
+          // صورة حقيقية: شروق الأرض فوق القمر (أبولو 8، ناسا)
+          Image.asset('assets/images/earthrise.jpg', fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xAA000000), Color(0x33000000), Color(0xDD000000)],
+              ),
+            ),
+          ),
           SafeArea(
             child: Column(
               children: [
@@ -146,14 +157,14 @@ class HomePage extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              tr('المرحلة 1: رحلة الصاروخ', 'Stage 1: Rocket journey'),
+                              tr('المرحلة 1: رحلة أوريون إلى القمر', 'Stage 1: Orion to the Moon'),
                               style: const TextStyle(
                                   fontSize: 16, fontWeight: FontWeight.bold),
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              tr('سافر 384,400 كم إلى القمر واهزم الوحوش بمسدسك!',
-                                  'Fly 384,400 km to the Moon and blast monsters with your pistol!'),
+                              tr('رحلة ثلاثية الأبعاد بمركبة ناسا: 384,400 كم بين الصخور والنيازك، مع صور حقيقية للفضاء',
+                                  'A 3D trip on NASA\'s spacecraft: 384,400 km through space rocks, with real space photos'),
                               style: const TextStyle(fontSize: 13, color: Colors.white70),
                             ),
                           ],
