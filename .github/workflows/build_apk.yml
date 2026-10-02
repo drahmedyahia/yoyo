@@ -36,7 +36,7 @@ jobs:
           cp -r /tmp/scaffold/android/app/src/main/res/. android/app/src/main/res/
           chmod +x android/gradlew
 
-      - name: Set up release signing (falls back to debug key if secrets are invalid)
+      - name: Set up release signing (falls back to the test key)
         env:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -53,8 +53,11 @@ jobs:
               "$KS_PASS" "${KEY_PASS:-$KS_PASS}" "$KEY_ALIAS" > android/key.properties
             echo "Using release keystore from secrets."
           else
-            rm -f android/upload-keystore.jks android/key.properties
-            echo "::warning::Signing secrets missing or invalid; signing with the debug key."
+            # مفتاح تجريبي ثابت موجود في المستودع: كل البناءات بنفس التوقيع
+            # فيمكن تثبيت النسخة الجديدة فوق القديمة. للتجربة فقط.
+            rm -f android/upload-keystore.jks
+            printf 'storePassword=android\nkeyPassword=android\nkeyAlias=testkey\nstoreFile=../test-keystore.jks\n' > android/key.properties
+            echo "::warning::Signing secrets missing or invalid; signing with the repo's test key."
           fi
 
       - name: Build APK
